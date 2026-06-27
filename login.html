@@ -132,7 +132,7 @@
   $('google-btn').addEventListener('click', async () => {
     const { error } = await sb.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: 'https://vyapartrack.yugfolio.me/dashboard.html' }
+      options: { redirectTo: 'https://yugfolio.in/dashboard.html' }
     });
     if (error) setAlert('login-alert', error.message);
   });

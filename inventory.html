@@ -24,7 +24,7 @@
 <script type="module">
   import { supabase, requireAuth } from './js/supabase.js';
   import { renderLayout } from './js/layout.js';
-  import { fmt, fmtDate, today, showToast, debounce, setCache, getCache, esc, openModal, closeModal } from './js/utils.js';
+  import { fmt, fmtDate, today, showToast, debounce, setCache, getCache, esc, openModal, closeModal, renderPaymentUI } from './js/utils.js';
 
   (async () => {
     const user = await requireAuth();
@@ -44,6 +44,7 @@
     let all = [], filtered = [], page = 1;
     let viewMode = localStorage.getItem('inv_view') || 'table';
     let editingProduct = null, sellingProduct = null;
+    let collectSellPayment = null;
 
     // Read URL params (from dashboard widget clicks)
     const urlParams = new URLSearchParams(location.search);
@@ -87,9 +88,9 @@
 
       <!-- Sell Modal -->
       <div class="modal-overlay" id="sell-modal">
-        <div class="modal">
+        <div class="modal" style="max-width:560px;">
           <div class="modal-header"><h3>💸 Mark as Sold</h3><button class="btn btn-ghost" id="close-sell-modal">✕</button></div>
-          <div class="modal-body">
+          <div class="modal-body" style="max-height:75vh;overflow-y:auto;">
             <div id="sell-alert"></div>
             <div id="sell-product-info" style="background:var(--surface-2);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px;font-size:.875rem;"></div>
             <div class="form-group"><label class="form-label">Sell Price (₹) <span class="req">*</span></label><input type="number" id="s-price" class="form-control" placeholder="0" min="0" /></div>
@@ -99,6 +100,8 @@
             </div>
             <div class="form-group"><label class="form-label">Sell Date <span class="req">*</span></label><input type="date" id="s-date" class="form-control" /></div>
             <div class="form-group"><label class="form-label">Remark</label><textarea id="s-remark" class="form-control" placeholder="Any notes..."></textarea></div>
+            <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);padding-bottom:10px;border-bottom:1px solid var(--border);margin:16px 0;">💳 Payment Mode</div>
+            <div id="inv-sell-payment-ui"></div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-outline" id="cancel-sell-btn">Cancel</button>
@@ -205,9 +208,16 @@
       if (isNaN(sell_price)||sell_price<0) return alertEl.innerHTML='<div class="alert alert-danger">Enter a valid sell price.</div>';
       if (!buyer_name) return alertEl.innerHTML='<div class="alert alert-danger">Buyer name is required.</div>';
       if (!sell_date)  return alertEl.innerHTML='<div class="alert alert-danger">Sell date is required.</div>';
+      const payData = collectSellPayment
+        ? collectSellPayment(sell_price)
+        : { fields: { sell_payment_mode: 'cash', sell_cash_amount: sell_price } };
+      if (payData.error) return alertEl.innerHTML=`<div class="alert alert-danger">${payData.error}</div>`;
       const btn = document.getElementById('confirm-sell-btn');
       btn.disabled=true; btn.innerHTML='Saving...';
-      const { error } = await supabase.from('products').update({ sell_price, buyer_name, buyer_contact, sell_date, sell_remark, status:'sold' }).eq('id', sellingProduct.id);
+      const { error } = await supabase.from('products').update({
+        sell_price, buyer_name, buyer_contact, sell_date, sell_remark,
+        status: 'sold', ...payData.fields
+      }).eq('id', sellingProduct.id);
       btn.disabled=false; btn.innerHTML='✅ Confirm Sale';
       if (error) return alertEl.innerHTML=`<div class="alert alert-danger">${error.message}</div>`;
       showToast('Sale recorded!', 'success');
@@ -263,6 +273,7 @@
       document.getElementById('s-date').value = today();
       document.getElementById('s-remark').value = '';
       openModal('sell-modal');
+      collectSellPayment = renderPaymentUI('inv-sell-payment-ui', 'sell', () => {});
     }
 
     function openEditModal(p) {
