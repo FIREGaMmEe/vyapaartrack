@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Inventory – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+  <style>
+    .view-toggle { display:flex;gap:4px;background:var(--surface-2);border-radius:var(--radius-sm);padding:3px; }
+    .view-btn { padding:5px 10px;border:none;background:none;border-radius:4px;cursor:pointer;font-size:.85rem;color:var(--text-muted);transition:all .15s; }
+    .view-btn.active { background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm); }
+    .grid-view { display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:16px; }
+    .grid-card { background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:box-shadow .15s; }
+    .grid-card:hover { box-shadow:var(--shadow-md); }
+    .grid-card-title { font-weight:600;font-size:.9rem;margin-bottom:4px; }
+    .grid-card-imei { font-family:monospace;font-size:.75rem;color:var(--text-muted);margin-bottom:8px; }
+    .grid-card-price { font-size:1rem;font-weight:700;color:var(--primary);margin-bottom:8px; }
+    .grid-card-actions { display:flex;gap:6px;flex-wrap:wrap; }
+  </style>
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { supabase, requireAuth } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+  import { fmt, fmtDate, today, showToast, debounce, setCache, getCache, esc, openModal, closeModal } from './js/utils.js';
+
+  (async () => {
+    const user = await requireAuth();
+    if (!user) return;
+
+    const container = renderLayout('inventory', user.id);
+    document.title = 'Inventory – VyaparTrack';
+    document.getElementById('topbar-title').textContent = 'Inventory';
+
+    if (!user.profile?.store_id) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">🏪</div><h3>No store assigned</h3></div>`;
+      return;
+    }
+
+    const storeId = user.profile.store_id;
+    const PAGE = 20;
+    let all = [], filtered = [], page = 1;
+    let viewMode = localStorage.getItem('inv_view') || 'table';
+    let editingProduct = null, sellingProduct = null;
+
+    // Read URL params (from dashboard widget clicks)
+    const urlParams = new URLSearchParams(location.search);
+    const initStatus = urlParams.get('status') || '';
+
+    container.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+        <div><h1>Inventory</h1><p id="inv-count">Loading...</p></div>
+        <a href="add.html" class="btn btn-primary">➕ Add Product</a>
+      </div>
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <div style="position:relative;flex:2;min-width:180px;">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-muted);">🔍</span>
+            <input type="text" id="search" class="form-control" placeholder="Search model or IMEI..." style="padding-left:36px;" />
+          </div>
+          <select id="f-status" class="form-control" style="max-width:140px;">
+            <option value="">All Status</option>
+            <option value="in_stock">In Stock</option>
+            <option value="sold">Sold</option>
+          </select>
+          <select id="f-price" class="form-control" style="max-width:160px;">
+            <option value="">All Prices</option>
+            <option value="0-5000">Under ₹5k</option>
+            <option value="5000-15000">₹5k–₹15k</option>
+            <option value="15000-30000">₹15k–₹30k</option>
+            <option value="30000-999999">Above ₹30k</option>
+          </select>
+          <button class="btn btn-outline btn-sm" id="clear-btn">Clear</button>
+          <div class="view-toggle" style="margin-left:auto;">
+            <button class="view-btn${viewMode==='table'?' active':''}" id="vt-table" title="Table view">☰</button>
+            <button class="view-btn${viewMode==='grid'?' active':''}" id="vt-grid" title="Grid view">⊞</button>
+            <button class="view-btn${viewMode==='compact'?' active':''}" id="vt-compact" title="Compact view">≡</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:0;">
+        <div id="inv-table"></div>
+        <div id="inv-pagination" style="padding:12px 16px;"></div>
+      </div>
+
+      <!-- Sell Modal -->
+      <div class="modal-overlay" id="sell-modal">
+        <div class="modal">
+          <div class="modal-header"><h3>💸 Mark as Sold</h3><button class="btn btn-ghost" id="close-sell-modal">✕</button></div>
+          <div class="modal-body">
+            <div id="sell-alert"></div>
+            <div id="sell-product-info" style="background:var(--surface-2);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px;font-size:.875rem;"></div>
+            <div class="form-group"><label class="form-label">Sell Price (₹) <span class="req">*</span></label><input type="number" id="s-price" class="form-control" placeholder="0" min="0" /></div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Buyer Name <span class="req">*</span></label><input type="text" id="s-buyer" class="form-control" placeholder="Buyer's name" /></div>
+              <div class="form-group"><label class="form-label">Buyer Contact</label><input type="tel" id="s-contact" class="form-control" placeholder="+91 98765 43210" /></div>
+            </div>
+            <div class="form-group"><label class="form-label">Sell Date <span class="req">*</span></label><input type="date" id="s-date" class="form-control" /></div>
+            <div class="form-group"><label class="form-label">Remark</label><textarea id="s-remark" class="form-control" placeholder="Any notes..."></textarea></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline" id="cancel-sell-btn">Cancel</button>
+            <button class="btn btn-success" id="confirm-sell-btn">✅ Confirm Sale</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit Modal -->
+      <div class="modal-overlay" id="edit-modal">
+        <div class="modal" style="max-width:600px;">
+          <div class="modal-header"><h3>✏️ Edit Product</h3><button class="btn btn-ghost" id="close-edit-modal">✕</button></div>
+          <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
+            <div id="edit-alert"></div>
+            <div class="form-group"><label class="form-label">Model Name <span class="req">*</span></label><input type="text" id="e-model" class="form-control" /></div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">IMEI 1 <span class="req">*</span></label><input type="text" id="e-imei1" class="form-control" /></div>
+              <div class="form-group"><label class="form-label">IMEI 2</label><input type="text" id="e-imei2" class="form-control" /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Storage</label><select id="e-storage" class="form-control"><option value="">—</option><option>16GB</option><option>32GB</option><option>64GB</option><option>128GB</option><option>256GB</option><option>512GB</option><option>1TB</option></select></div>
+              <div class="form-group"><label class="form-label">RAM</label><select id="e-ram" class="form-control"><option value="">—</option><option>2GB</option><option>3GB</option><option>4GB</option><option>6GB</option><option>8GB</option><option>12GB</option><option>16GB</option></select></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Color</label><input type="text" id="e-color" class="form-control" /></div>
+              <div class="form-group"><label class="form-label">Condition</label><select id="e-condition" class="form-control"><option value="">—</option><option value="Excellent">Excellent</option><option value="Good">Good</option><option value="Fair">Fair</option><option value="Poor">Poor</option></select></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Battery Health: <span id="e-battery-val" style="color:var(--primary);font-weight:600;">80%</span></label>
+              <input type="range" id="e-battery" min="0" max="100" value="80" style="width:100%;accent-color:var(--primary);" oninput="document.getElementById('e-battery-val').textContent=this.value+'%'" />
+            </div>
+            <div class="form-group"><label class="form-label">Accessories</label><input type="text" id="e-accessories" class="form-control" /></div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Purchase Price (₹) <span class="req">*</span></label><input type="number" id="e-price" class="form-control" /></div>
+              <div class="form-group"><label class="form-label">Purchase Date <span class="req">*</span></label><input type="date" id="e-date" class="form-control" /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Seller Name</label><input type="text" id="e-seller" class="form-control" /></div>
+              <div class="form-group"><label class="form-label">Seller Contact</label><input type="tel" id="e-seller-contact" class="form-control" /></div>
+            </div>
+            <div class="form-group"><label class="form-label">Remark</label><textarea id="e-remark" class="form-control"></textarea></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline" id="cancel-edit-btn">Cancel</button>
+            <button class="btn btn-primary" id="save-edit-btn">💾 Save Changes</button>
+          </div>
+        </div>
+      </div>`;
+
+    // Set initial status filter from URL
+    if (initStatus) document.getElementById('f-status').value = initStatus;
+
+    // Load cache
+    const cached = await getCache(`inv_${storeId}`);
+    if (cached) { all = cached; applyFilters(); }
+
+    // Fetch fresh
+    const { data, error } = await supabase.from('products').select('*').eq('store_id', storeId).order('created_at', { ascending: false });
+    if (error) { showToast('Failed to load inventory', 'error'); return; }
+    all = data || [];
+    await setCache(`inv_${storeId}`, all);
+    applyFilters();
+
+    // Filters
+    document.getElementById('search').addEventListener('input', debounce(() => { page=1; applyFilters(); }, 250));
+    document.getElementById('f-status').addEventListener('change', () => { page=1; applyFilters(); });
+    document.getElementById('f-price').addEventListener('change', () => { page=1; applyFilters(); });
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      document.getElementById('search').value = '';
+      document.getElementById('f-status').value = '';
+      document.getElementById('f-price').value = '';
+      page=1; applyFilters();
+    });
+
+    // View toggle
+    ['table','grid','compact'].forEach(v => {
+      document.getElementById(`vt-${v}`).addEventListener('click', () => {
+        viewMode = v;
+        localStorage.setItem('inv_view', v);
+        document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById(`vt-${v}`).classList.add('active');
+        renderTable();
+      });
+    });
+
+    // Modal wiring
+    const closeModals = () => { closeModal('sell-modal'); closeModal('edit-modal'); };
+    document.getElementById('close-sell-modal').addEventListener('click', () => closeModal('sell-modal'));
+    document.getElementById('cancel-sell-btn').addEventListener('click', () => closeModal('sell-modal'));
+    document.getElementById('close-edit-modal').addEventListener('click', () => closeModal('edit-modal'));
+    document.getElementById('cancel-edit-btn').addEventListener('click', () => closeModal('edit-modal'));
+    document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if(e.target===o) o.classList.remove('open'); }));
+
+    // Confirm sell
+    document.getElementById('confirm-sell-btn').addEventListener('click', async () => {
+      const alertEl = document.getElementById('sell-alert');
+      alertEl.innerHTML = '';
+      if (!sellingProduct) return;
+      const sell_price    = parseFloat(document.getElementById('s-price').value);
+      const buyer_name    = document.getElementById('s-buyer').value.trim();
+      const buyer_contact = document.getElementById('s-contact').value.trim() || null;
+      const sell_date     = document.getElementById('s-date').value;
+      const sell_remark   = document.getElementById('s-remark').value.trim() || null;
+      if (isNaN(sell_price)||sell_price<0) return alertEl.innerHTML='<div class="alert alert-danger">Enter a valid sell price.</div>';
+      if (!buyer_name) return alertEl.innerHTML='<div class="alert alert-danger">Buyer name is required.</div>';
+      if (!sell_date)  return alertEl.innerHTML='<div class="alert alert-danger">Sell date is required.</div>';
+      const btn = document.getElementById('confirm-sell-btn');
+      btn.disabled=true; btn.innerHTML='Saving...';
+      const { error } = await supabase.from('products').update({ sell_price, buyer_name, buyer_contact, sell_date, sell_remark, status:'sold' }).eq('id', sellingProduct.id);
+      btn.disabled=false; btn.innerHTML='✅ Confirm Sale';
+      if (error) return alertEl.innerHTML=`<div class="alert alert-danger">${error.message}</div>`;
+      showToast('Sale recorded!', 'success');
+      closeModal('sell-modal');
+      setTimeout(() => location.href=`invoice.html?id=${sellingProduct.id}`, 400);
+    });
+
+    // Confirm edit
+    document.getElementById('save-edit-btn').addEventListener('click', async () => {
+      const alertEl = document.getElementById('edit-alert');
+      alertEl.innerHTML = '';
+      if (!editingProduct) return;
+      const model   = document.getElementById('e-model').value.trim();
+      const imei_1  = document.getElementById('e-imei1').value.trim();
+      const imei_2  = document.getElementById('e-imei2').value.trim() || null;
+      const price   = parseFloat(document.getElementById('e-price').value);
+      const date    = document.getElementById('e-date').value;
+      if (!model)  return alertEl.innerHTML='<div class="alert alert-danger">Model name is required.</div>';
+      if (!imei_1) return alertEl.innerHTML='<div class="alert alert-danger">IMEI 1 is required.</div>';
+      if (isNaN(price)||price<0) return alertEl.innerHTML='<div class="alert alert-danger">Valid price required.</div>';
+      if (!date)   return alertEl.innerHTML='<div class="alert alert-danger">Date required.</div>';
+      const btn = document.getElementById('save-edit-btn');
+      btn.disabled=true; btn.innerHTML='Saving...';
+      const updates = {
+        model, imei_1, imei_2, purchase_price:price, purchase_date:date,
+        seller_name: document.getElementById('e-seller').value.trim(),
+        seller_contact: document.getElementById('e-seller-contact').value.trim()||null,
+        purchase_remark: document.getElementById('e-remark').value.trim()||null,
+        storage: document.getElementById('e-storage').value||null,
+        ram: document.getElementById('e-ram').value||null,
+        color: document.getElementById('e-color').value.trim()||null,
+        condition: document.getElementById('e-condition').value||null,
+        battery_health: parseInt(document.getElementById('e-battery').value)||null,
+        accessories: document.getElementById('e-accessories').value.trim()||null,
+      };
+      const { error } = await supabase.from('products').update(updates).eq('id', editingProduct.id);
+      btn.disabled=false; btn.innerHTML='💾 Save Changes';
+      if (error) return alertEl.innerHTML=`<div class="alert alert-danger">${error.message}</div>`;
+      const idx = all.findIndex(p=>p.id===editingProduct.id);
+      if (idx!==-1) { all[idx]={...all[idx],...updates}; await setCache(`inv_${storeId}`,all); }
+      closeModal('edit-modal');
+      showToast('Product updated!','success');
+      applyFilters();
+    });
+
+    function openSellModal(p) {
+      sellingProduct = p;
+      document.getElementById('sell-alert').innerHTML = '';
+      document.getElementById('sell-product-info').innerHTML = `<strong>${esc(p.model)}</strong> · ${esc(p.imei_1)} · Bought for ${fmt(p.purchase_price)}`;
+      document.getElementById('s-price').value = '';
+      document.getElementById('s-buyer').value = '';
+      document.getElementById('s-contact').value = '';
+      document.getElementById('s-date').value = today();
+      document.getElementById('s-remark').value = '';
+      openModal('sell-modal');
+    }
+
+    function openEditModal(p) {
+      editingProduct = p;
+      document.getElementById('edit-alert').innerHTML = '';
+      document.getElementById('e-model').value   = p.model||'';
+      document.getElementById('e-imei1').value   = p.imei_1||'';
+      document.getElementById('e-imei2').value   = p.imei_2||'';
+      document.getElementById('e-price').value   = p.purchase_price||'';
+      document.getElementById('e-date').value    = p.purchase_date||today();
+      document.getElementById('e-seller').value  = p.seller_name||'';
+      document.getElementById('e-seller-contact').value = p.seller_contact||'';
+      document.getElementById('e-remark').value  = p.purchase_remark||'';
+      document.getElementById('e-storage').value = p.storage||'';
+      document.getElementById('e-ram').value     = p.ram||'';
+      document.getElementById('e-color').value   = p.color||'';
+      document.getElementById('e-condition').value = p.condition||'';
+      const bat = p.battery_health??80;
+      document.getElementById('e-battery').value = bat;
+      document.getElementById('e-battery-val').textContent = bat+'%';
+      document.getElementById('e-accessories').value = p.accessories||'';
+      openModal('edit-modal');
+    }
+
+    function applyFilters() {
+      const q  = document.getElementById('search')?.value.toLowerCase()||'';
+      const st = document.getElementById('f-status')?.value||'';
+      const pr = document.getElementById('f-price')?.value||'';
+      filtered = all.filter(p => {
+        if (q && !`${p.model} ${p.imei_1} ${p.imei_2||''} ${p.seller_name||''} ${p.buyer_name||''}`.toLowerCase().includes(q)) return false;
+        if (st && p.status!==st) return false;
+        if (pr) { const [mn,mx]=pr.split('-').map(Number); if((p.purchase_price||0)<mn||(p.purchase_price||0)>mx) return false; }
+        return true;
+      });
+      const cnt = document.getElementById('inv-count');
+      if (cnt) cnt.textContent = `${filtered.length} of ${all.length} products`;
+      renderTable(); renderPagination();
+    }
+
+    function renderTable() {
+      const el = document.getElementById('inv-table');
+      if (!el) return;
+      const start = (page-1)*PAGE, slice = filtered.slice(start, start+PAGE);
+      if (!slice.length) {
+        el.innerHTML = `<div class="empty-state"><div class="empty-icon">📦</div><h3>${all.length?'No results':'No products yet'}</h3><p>${all.length?'Try adjusting filters':'Add your first product'}</p>${!all.length?'<a href="add.html" class="btn btn-primary" style="margin-top:12px;">Add Product</a>':''}</div>`;
+        return;
+      }
+
+      if (viewMode === 'grid') {
+        el.innerHTML = `<div class="grid-view">${slice.map(p=>`
+          <div class="grid-card">
+            <div class="grid-card-title">${esc(p.model)}</div>
+            <div class="grid-card-imei">${esc(p.imei_1)}</div>
+            ${p.storage||p.ram?`<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:6px;">${[p.storage,p.ram].filter(Boolean).join(' · ')}</div>`:''}
+            <div class="grid-card-price">${fmt(p.purchase_price)}</div>
+            <span class="badge ${p.status==='in_stock'?'badge-success':'badge-warning'}" style="margin-bottom:10px;">${p.status==='in_stock'?'🟢 In Stock':'✅ Sold'}</span>
+            <div class="grid-card-actions">
+              <a href="product.html?id=${p.id}" class="btn btn-outline btn-sm">View</a>
+              <button class="btn btn-sm edit-btn" data-id="${p.id}" style="background:var(--primary-light);color:var(--primary);">✏️</button>
+              ${p.status==='in_stock'?`<button class="btn btn-success btn-sm sell-btn" data-id="${p.id}">💸 Sell</button>`:`<a href="invoice.html?id=${p.id}" class="btn btn-sm btn-outline">🧾</a>`}
+            </div>
+          </div>`).join('')}</div>`;
+      } else if (viewMode === 'compact') {
+        el.innerHTML = `<div style="padding:8px 0;">${slice.map(p=>`
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+            <span class="badge ${p.status==='in_stock'?'badge-success':'badge-warning'}" style="flex-shrink:0;">${p.status==='in_stock'?'●':'✓'}</span>
+            <div style="flex:1;min-width:120px;">
+              <strong style="font-size:.875rem;">${esc(p.model)}</strong>
+              <span style="font-size:.75rem;color:var(--text-muted);margin-left:8px;font-family:monospace;">${esc(p.imei_1)}</span>
+            </div>
+            <span style="font-weight:600;color:var(--primary);font-size:.875rem;">${fmt(p.purchase_price)}</span>
+            <div style="display:flex;gap:4px;">
+              <a href="product.html?id=${p.id}" class="btn btn-outline btn-sm">View</a>
+              <button class="btn btn-sm edit-btn" data-id="${p.id}" style="background:var(--primary-light);color:var(--primary);">✏️</button>
+              ${p.status==='in_stock'?`<button class="btn btn-success btn-sm sell-btn" data-id="${p.id}">💸</button>`:`<a href="invoice.html?id=${p.id}" class="btn btn-sm btn-outline">🧾</a>`}
+            </div>
+          </div>`).join('')}</div>`;
+      } else {
+        // Table view (default)
+        el.innerHTML = `
+          <div class="table-wrap" style="border:none;border-radius:0;">
+            <table>
+              <thead><tr><th>Model</th><th>IMEI 1</th><th>Buy Price</th><th>Sell Price</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+              <tbody>${slice.map(p=>`
+                <tr>
+                  <td>
+                    <strong>${esc(p.model)}</strong>
+                    ${p.storage||p.ram?`<br><span style="font-size:.72rem;color:var(--text-muted);">${[p.storage,p.ram].filter(Boolean).join(' · ')}</span>`:''}
+                  </td>
+                  <td style="font-family:monospace;font-size:.82rem;">${esc(p.imei_1)}</td>
+                  <td>${fmt(p.purchase_price)}</td>
+                  <td>${p.sell_price?fmt(p.sell_price):'<span style="color:var(--text-light);">—</span>'}</td>
+                  <td><span class="badge ${p.status==='in_stock'?'badge-success':'badge-warning'}">${p.status==='in_stock'?'🟢 In Stock':'✅ Sold'}</span></td>
+                  <td style="font-size:.82rem;">${fmtDate(p.purchase_date)}</td>
+                  <td>
+                    <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                      <a href="product.html?id=${p.id}" class="btn btn-outline btn-sm">View</a>
+                      <button class="btn btn-sm edit-btn" data-id="${p.id}" style="background:var(--primary-light);color:var(--primary);border:1px solid var(--primary-muted);">✏️ Edit</button>
+                      ${p.status==='in_stock'
+                        ? `<button class="btn btn-success btn-sm sell-btn" data-id="${p.id}">💸 Sell</button>`
+                        : `<a href="invoice.html?id=${p.id}" class="btn btn-outline btn-sm">🧾 Invoice</a>`}
+                    </div>
+                  </td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`;
+      }
+
+      // Wire buttons
+      el.querySelectorAll('.edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => { const p=all.find(x=>x.id===btn.dataset.id); if(p) openEditModal(p); });
+      });
+      el.querySelectorAll('.sell-btn').forEach(btn => {
+        btn.addEventListener('click', () => { const p=all.find(x=>x.id===btn.dataset.id); if(p) openSellModal(p); });
+      });
+    }
+
+    function renderPagination() {
+      const el = document.getElementById('inv-pagination');
+      if (!el) return;
+      const total = Math.ceil(filtered.length/PAGE);
+      if (total<=1) { el.innerHTML=''; return; }
+      const s=(page-1)*PAGE+1, e=Math.min(page*PAGE,filtered.length);
+      el.innerHTML=`<div class="pagination"><span>Showing ${s}–${e} of ${filtered.length}</span><div class="pagination-btns"><button class="btn btn-outline btn-sm" id="pp" ${page===1?'disabled':''}>← Prev</button><span style="padding:6px 12px;font-size:.85rem;">${page}/${total}</span><button class="btn btn-outline btn-sm" id="np" ${page===total?'disabled':''}>Next →</button></div></div>`;
+      document.getElementById('pp')?.addEventListener('click',()=>{if(page>1){page--;renderTable();renderPagination();window.scrollTo(0,0);}});
+      document.getElementById('np')?.addEventListener('click',()=>{if(page<total){page++;renderTable();renderPagination();window.scrollTo(0,0);}});
+    }
+  })();
+</script>
+</body>
+</html>

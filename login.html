@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+</head>
+<body>
+<script src="js/config.js"></script>
+
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <img id="auth-logo" src="assets/Logo.png" alt="VyaparTrack" />
+    </div>
+    <h2 style="text-align:center;margin-bottom:4px;">Welcome back</h2>
+    <p style="text-align:center;font-size:.875rem;margin-bottom:24px;">Sign in to your account</p>
+
+    <!-- Method tabs -->
+    <div class="tabs" style="margin-bottom:20px;">
+      <button class="tab-btn active" data-method="email">Email</button>
+      <button class="tab-btn" data-method="phone">Phone OTP</button>
+    </div>
+
+    <!-- Email login -->
+    <div id="method-email">
+      <div id="login-alert"></div>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input type="email" id="login-email" class="form-control" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="login-password" class="form-control" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <button class="btn btn-primary btn-full btn-lg" id="email-login-btn">Sign In</button>
+      <div class="divider">or</div>
+      <button class="social-btn" id="google-btn">
+        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="G" />
+        Continue with Google
+      </button>
+    </div>
+
+    <!-- Phone OTP -->
+    <div id="method-phone" style="display:none;">
+      <div id="phone-alert"></div>
+      <div id="otp-step-1">
+        <div class="form-group">
+          <label class="form-label">Phone Number</label>
+          <input type="tel" id="phone-input" class="form-control" placeholder="+91 98765 43210" />
+          <span class="form-hint">Include country code e.g. +91</span>
+        </div>
+        <button class="btn btn-primary btn-full btn-lg" id="send-otp-btn">Send OTP</button>
+      </div>
+      <div id="otp-step-2" style="display:none;">
+        <div id="otp-alert"></div>
+        <div class="form-group">
+          <label class="form-label">Enter OTP</label>
+          <input type="text" id="otp-input" class="form-control" placeholder="6-digit code" maxlength="6" inputmode="numeric" />
+        </div>
+        <button class="btn btn-primary btn-full btn-lg" id="verify-otp-btn">Verify & Sign In</button>
+        <button class="btn btn-ghost btn-full" id="back-otp-btn" style="margin-top:8px;">← Change number</button>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:20px;font-size:.875rem;color:var(--text-muted);">
+      Don't have an account?
+      <a href="register.html" style="color:var(--primary);font-weight:500;">Create one</a>
+    </div>
+    <div style="text-align:center;margin-top:8px;">
+      <a href="index.html" style="font-size:.8rem;color:var(--text-muted);">← Back to home</a>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script type="module">
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+  import { initTheme } from './js/utils.js';
+
+  initTheme();
+
+  const sb = createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+    auth: { persistSession:true, autoRefreshToken:true, detectSessionInUrl:true, storageKey:'vt_auth' }
+  });
+
+  // Redirect if already logged in
+  sb.auth.onAuthStateChange((_e, session) => {
+    if (session) window.location.href = 'dashboard.html';
+  });
+
+  const $ = id => document.getElementById(id);
+  function setAlert(id, msg, type='danger') {
+    const el = $(id); if (el) el.innerHTML = msg ? `<div class="alert alert-${type}">${msg}</div>` : '';
+  }
+  function setLoading(btn, on, label) {
+    btn.disabled = on;
+    btn.innerHTML = on
+      ? '<span class="spinner" style="width:16px;height:16px;border-width:2px;margin-right:6px;vertical-align:middle;"></span>Please wait...'
+      : label;
+  }
+
+  // Method tabs
+  document.querySelectorAll('[data-method]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-method]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      $('method-email').style.display = btn.dataset.method === 'email' ? '' : 'none';
+      $('method-phone').style.display = btn.dataset.method === 'phone' ? '' : 'none';
+    });
+  });
+
+  // Email sign in
+  const emailBtn = $('email-login-btn');
+  emailBtn.addEventListener('click', async () => {
+    setAlert('login-alert', '');
+    const email = $('login-email').value.trim();
+    const pass  = $('login-password').value;
+    if (!email || !pass) return setAlert('login-alert', 'Enter email and password.');
+    setLoading(emailBtn, true, 'Sign In');
+    const { error } = await sb.auth.signInWithPassword({ email, password: pass });
+    setLoading(emailBtn, false, 'Sign In');
+    if (error) return setAlert('login-alert', error.message);
+    window.location.href = 'dashboard.html';
+  });
+  $('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') emailBtn.click(); });
+
+  // Google
+  $('google-btn').addEventListener('click', async () => {
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: 'https://vyapartrack.yugfolio.me/dashboard.html' }
+    });
+    if (error) setAlert('login-alert', error.message);
+  });
+
+  // Phone OTP
+  const sendBtn = $('send-otp-btn');
+  sendBtn.addEventListener('click', async () => {
+    setAlert('phone-alert', '');
+    const phone = $('phone-input').value.trim();
+    if (!phone) return setAlert('phone-alert', 'Enter your phone number.');
+    setLoading(sendBtn, true, 'Send OTP');
+    const { error } = await sb.auth.signInWithOtp({ phone });
+    setLoading(sendBtn, false, 'Send OTP');
+    if (error) return setAlert('phone-alert', error.message);
+    $('otp-step-1').style.display = 'none';
+    $('otp-step-2').style.display = '';
+    setAlert('otp-alert', 'OTP sent!', 'success');
+  });
+
+  const verifyBtn = $('verify-otp-btn');
+  verifyBtn.addEventListener('click', async () => {
+    setAlert('otp-alert', '');
+    const phone = $('phone-input').value.trim();
+    const token = $('otp-input').value.trim();
+    if (!token) return setAlert('otp-alert', 'Enter the OTP.');
+    setLoading(verifyBtn, true, 'Verify & Sign In');
+    const { error } = await sb.auth.verifyOtp({ phone, token, type: 'sms' });
+    setLoading(verifyBtn, false, 'Verify & Sign In');
+    if (error) return setAlert('otp-alert', error.message);
+    window.location.href = 'dashboard.html';
+  });
+  $('otp-input').addEventListener('keydown', e => { if (e.key === 'Enter') verifyBtn.click(); });
+
+  $('back-otp-btn').addEventListener('click', () => {
+    $('otp-step-1').style.display = '';
+    $('otp-step-2').style.display = 'none';
+    setAlert('phone-alert', ''); setAlert('otp-alert', '');
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Panel – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { supabase, requireAuth } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+  import { showToast, openModal, closeModal, esc, fmtDate } from './js/utils.js';
+
+  (async () => {
+
+  const user = await requireAuth();
+  if (!user) throw new Error('not authed');
+
+  // Block non-admins
+  if (user.id !== window.SUPER_ADMIN_ID) {
+    document.body.innerHTML = `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;">
+        <div style="text-align:center;padding:40px;">
+          <div style="font-size:3rem;">🚫</div>
+          <h2 style="margin:12px 0 8px;">Access Denied</h2>
+          <p style="color:#6b7280;">You don't have permission to view this page.</p>
+          <a href="dashboard.html" style="display:inline-block;margin-top:16px;padding:10px 20px;background:#2563eb;color:#fff;border-radius:6px;text-decoration:none;">Go to Dashboard</a>
+        </div>
+      </div>`;
+    throw new Error('not admin');
+  }
+
+  const container = renderLayout('admin', user.id);
+  document.title = 'Admin Panel – VyaparTrack';
+  document.getElementById('topbar-title').textContent = '⚙️ Admin Panel';
+
+  // ── State ──
+  let stores = [], allUsers = [], editingStore = null;
+
+  // ── Render shell ──
+  container.innerHTML = `
+    <div style="margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+      <div><h1>Admin Panel</h1><p>Manage all stores, users and plans</p></div>
+      <button class="btn btn-primary" id="new-store-btn">➕ Create Store</button>
+    </div>
+
+    <!-- Summary stats -->
+    <div class="stats-grid" id="admin-stats" style="margin-bottom:24px;">
+      <div class="stat-card"><div class="stat-icon" style="background:#eff6ff;color:#2563eb;">🏪</div><div class="stat-value" id="s-stores">—</div><div class="stat-label">Total Stores</div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:#f0fdf4;color:#16a34a;">👥</div><div class="stat-value" id="s-users">—</div><div class="stat-label">Total Users</div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:#fffbeb;color:#d97706;">📦</div><div class="stat-value" id="s-products">—</div><div class="stat-label">Total Products</div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:#f5f3ff;color:#7c3aed;">💰</div><div class="stat-value" id="s-profit">—</div><div class="stat-label">Platform Profit</div></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="stores">Stores</button>
+      <button class="tab-btn" data-tab="users">Users</button>
+    </div>
+
+    <!-- Stores tab -->
+    <div id="tab-stores">
+      <div id="stores-list"><div style="text-align:center;padding:40px;"><div class="spinner"></div></div></div>
+    </div>
+
+    <!-- Users tab -->
+    <div id="tab-users" style="display:none;">
+      <div style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;">
+        <div style="position:relative;flex:1;min-width:200px;">
+          <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-muted);">🔍</span>
+          <input type="text" id="user-search" class="form-control" placeholder="Search by email or ID..." style="padding-left:36px;" />
+        </div>
+        <select id="user-store-filter" class="form-control" style="max-width:200px;">
+          <option value="">All Stores</option>
+        </select>
+      </div>
+      <div id="users-list"><div style="text-align:center;padding:40px;"><div class="spinner"></div></div></div>
+    </div>
+
+    <!-- ── CREATE STORE MODAL ── -->
+    <div class="modal-overlay" id="create-store-modal">
+      <div class="modal">
+        <div class="modal-header"><h3>➕ Create Store</h3><button class="btn btn-ghost" onclick="closeModal('create-store-modal')">✕</button></div>
+        <div class="modal-body">
+          <div id="cs-alert"></div>
+          <div class="form-group"><label class="form-label">Store Name <span class="req">*</span></label><input type="text" id="cs-name" class="form-control" placeholder="e.g. Ramesh Mobile Shop" /></div>
+          <div class="form-group"><label class="form-label">GST Number</label><input type="text" id="cs-gst" class="form-control" placeholder="22AAAAA0000A1Z5 (optional)" /></div>
+          <div class="form-group">
+            <label class="form-label">Plan Level <span class="req">*</span></label>
+            <select id="cs-plan" class="form-control">
+              ${Object.entries(window.PLAN_NAMES).map(([l,n])=>`<option value="${l}">Level ${l} – ${n} (${window.PLAN_LIMITS[l]===Infinity?'Unlimited':window.PLAN_LIMITS[l]} users)</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="closeModal('create-store-modal')">Cancel</button>
+          <button class="btn btn-primary" id="cs-submit">Create Store</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── EDIT STORE MODAL ── -->
+    <div class="modal-overlay" id="edit-store-modal">
+      <div class="modal">
+        <div class="modal-header"><h3>✏️ Edit Store</h3><button class="btn btn-ghost" onclick="closeModal('edit-store-modal')">✕</button></div>
+        <div class="modal-body">
+          <div id="es-alert"></div>
+          <div class="form-group"><label class="form-label">Store Name <span class="req">*</span></label><input type="text" id="es-name" class="form-control" /></div>
+          <div class="form-group"><label class="form-label">GST Number</label><input type="text" id="es-gst" class="form-control" /></div>
+          <div class="form-group">
+            <label class="form-label">Plan Level</label>
+            <select id="es-plan" class="form-control">
+              ${Object.entries(window.PLAN_NAMES).map(([l,n])=>`<option value="${l}">Level ${l} – ${n} (${window.PLAN_LIMITS[l]===Infinity?'Unlimited':window.PLAN_LIMITS[l]} users)</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="closeModal('edit-store-modal')">Cancel</button>
+          <button class="btn btn-primary" id="es-submit">Save Changes</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ASSIGN USER MODAL ── -->
+    <div class="modal-overlay" id="assign-user-modal">
+      <div class="modal">
+        <div class="modal-header"><h3>👤 Assign User to Store</h3><button class="btn btn-ghost" onclick="closeModal('assign-user-modal')">✕</button></div>
+        <div class="modal-body">
+          <div id="au-alert"></div>
+          <div class="form-group">
+            <label class="form-label">User</label>
+            <select id="au-user" class="form-control"><option value="">Select user...</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Store</label>
+            <select id="au-store" class="form-control"><option value="">Select store...</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Role</label>
+            <select id="au-role" class="form-control"><option value="staff">Staff</option><option value="owner">Owner</option></select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="closeModal('assign-user-modal')">Cancel</button>
+          <button class="btn btn-primary" id="au-submit">Assign</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── DELETE STORE MODAL ── -->
+    <div class="modal-overlay" id="del-store-modal">
+      <div class="modal">
+        <div class="modal-header"><h3>🗑 Delete Store</h3><button class="btn btn-ghost" onclick="closeModal('del-store-modal')">✕</button></div>
+        <div class="modal-body">
+          <div class="alert alert-danger">⚠️ This will permanently delete the store and ALL its products. This cannot be undone.</div>
+          <p id="del-store-name" style="color:var(--text);font-weight:600;"></p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="closeModal('del-store-modal')">Cancel</button>
+          <button class="btn btn-danger" id="del-store-submit">Delete Store</button>
+        </div>
+      </div>
+    </div>`;
+
+  // ── Make modal helpers global ──
+  window.openModal = openModal;
+  window.closeModal = closeModal;
+  document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if(e.target===o) o.classList.remove('open'); }));
+
+  // ── Tab switching ──
+  document.querySelectorAll('[data-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-tab]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-stores').style.display = btn.dataset.tab === 'stores' ? '' : 'none';
+      document.getElementById('tab-users').style.display  = btn.dataset.tab === 'users'  ? '' : 'none';
+    });
+  });
+
+  // ── Load all data ──
+  await loadAll();
+
+  async function loadAll() {
+    const [{ data: storeData }, { data: userData }, { data: productData }] = await Promise.all([
+      supabase.from('stores').select('*').order('created_at', { ascending: false }),
+      supabase.from('users').select('id, store_id, role, name, created_at'),
+      supabase.from('products').select('id, store_id, purchase_price, sell_price, status')
+    ]);
+
+    stores   = storeData   || [];
+    allUsers = userData    || [];
+    const products = productData || [];
+
+    // Summary stats
+    const totalProfit = products.filter(p=>p.status==='sold').reduce((s,p)=>s+((p.sell_price||0)-(p.purchase_price||0)),0);
+    document.getElementById('s-stores').textContent   = stores.length;
+    document.getElementById('s-users').textContent    = allUsers.length;
+    document.getElementById('s-products').textContent = products.length;
+    document.getElementById('s-profit').textContent   = '₹' + totalProfit.toLocaleString('en-IN');
+
+    renderStores(products);
+    renderUsers();
+    populateAssignDropdowns();
+  }
+
+  // ── Render stores table ──
+  function renderStores(products) {
+    const el = document.getElementById('stores-list');
+    if (!stores.length) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-icon">🏪</div><h3>No stores yet</h3><p>Create your first store</p></div>`;
+      return;
+    }
+
+    // Build product count map per store
+    const pCount = {}, pSold = {}, pProfit = {};
+    (products||[]).forEach(p => {
+      pCount[p.store_id]  = (pCount[p.store_id]  || 0) + 1;
+      if (p.status==='sold') {
+        pSold[p.store_id]   = (pSold[p.store_id]   || 0) + 1;
+        pProfit[p.store_id] = (pProfit[p.store_id] || 0) + ((p.sell_price||0)-(p.purchase_price||0));
+      }
+    });
+
+    el.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Store Name</th><th>GST</th><th>Plan</th>
+            <th>Users</th><th>Products</th><th>Sold</th><th>Profit</th>
+            <th>Created</th><th>Actions</th>
+          </tr></thead>
+          <tbody>
+            ${stores.map(s => {
+              const uCount = allUsers.filter(u=>u.store_id===s.id).length;
+              const maxU   = window.PLAN_LIMITS[s.plan_level];
+              return `<tr>
+                <td><strong>${esc(s.name)}</strong></td>
+                <td style="font-size:.82rem;">${esc(s.gst_number)||'<span style="color:var(--text-light);">—</span>'}</td>
+                <td><span class="badge badge-primary">L${s.plan_level} ${window.PLAN_NAMES[s.plan_level]}</span></td>
+                <td>${uCount} / ${maxU===Infinity?'∞':maxU}</td>
+                <td>${pCount[s.id]||0}</td>
+                <td>${pSold[s.id]||0}</td>
+                <td style="color:var(--success);">₹${(pProfit[s.id]||0).toLocaleString('en-IN')}</td>
+                <td style="font-size:.82rem;">${fmtDate(s.created_at)}</td>
+                <td>
+                  <div style="display:flex;gap:6px;">
+                    <button class="btn btn-outline btn-sm" onclick="editStore('${s.id}')">✏️ Edit</button>
+                    <button class="btn btn-sm" style="background:var(--danger-light);color:var(--danger);border:1px solid var(--danger);" onclick="deleteStore('${s.id}','${esc(s.name)}')">🗑</button>
+                  </div>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // ── Render users table ──
+  function renderUsers(filter = '', storeFilter = '') {
+    const el = document.getElementById('users-list');
+    let list = [...allUsers];
+    if (filter) list = list.filter(u => u.id.toLowerCase().includes(filter.toLowerCase()));
+    if (storeFilter) list = list.filter(u => u.store_id === storeFilter);
+
+    if (!list.length) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-icon">👥</div><h3>No users found</h3></div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>User ID</th><th>Store</th><th>Role</th><th>Joined</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${list.map(u => {
+              const storeName = stores.find(s=>s.id===u.store_id)?.name || '—';
+              return `<tr>
+                <td><strong>${esc(u.name||'—')}</strong></td>
+                <td style="font-family:monospace;font-size:.78rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;">${esc(u.id)}</td>
+                <td>${esc(storeName)}</td>
+                <td><span class="badge ${u.role==='owner'?'badge-primary':'badge-gray'}">${u.role||'—'}</span></td>
+                <td style="font-size:.82rem;">${fmtDate(u.created_at)}</td>
+                <td>
+                  <button class="btn btn-outline btn-sm" onclick="openAssignForUser('${u.id}')">🔄 Reassign</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // ── Populate assign dropdowns ──
+  function populateAssignDropdowns() {
+    // Store filter in users tab
+    const sf = document.getElementById('user-store-filter');
+    sf.innerHTML = '<option value="">All Stores</option>' + stores.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+
+    // Assign modal dropdowns
+    const auUser  = document.getElementById('au-user');
+    const auStore = document.getElementById('au-store');
+    auUser.innerHTML  = '<option value="">Select user...</option>' + allUsers.map(u=>`<option value="${u.id}">${esc(u.id.slice(0,16))}... (${u.role||'no role'})</option>`).join('');
+    auStore.innerHTML = '<option value="">Select store...</option>' + stores.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  }
+
+  // ── User search / filter ──
+  document.getElementById('user-search').addEventListener('input', function() {
+    renderUsers(this.value, document.getElementById('user-store-filter').value);
+  });
+  document.getElementById('user-store-filter').addEventListener('change', function() {
+    renderUsers(document.getElementById('user-search').value, this.value);
+  });
+
+  // ── Create store ──
+  document.getElementById('new-store-btn').addEventListener('click', () => {
+    document.getElementById('cs-alert').innerHTML = '';
+    document.getElementById('cs-name').value = '';
+    document.getElementById('cs-gst').value  = '';
+    document.getElementById('cs-plan').value = '1';
+    openModal('create-store-modal');
+  });
+
+  document.getElementById('cs-submit').addEventListener('click', async () => {
+    const alertEl = document.getElementById('cs-alert');
+    const name = document.getElementById('cs-name').value.trim();
+    const gst  = document.getElementById('cs-gst').value.trim() || null;
+    const plan = parseInt(document.getElementById('cs-plan').value);
+    if (!name) return alertEl.innerHTML = '<div class="alert alert-danger">Store name is required.</div>';
+
+    const btn = document.getElementById('cs-submit');
+    btn.disabled = true; btn.innerHTML = 'Creating...';
+
+    const { data, error } = await supabase.from('stores').insert({ name, gst_number: gst, plan_level: plan }).select().single();
+    btn.disabled = false; btn.innerHTML = 'Create Store';
+
+    if (error) return alertEl.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+
+    closeModal('create-store-modal');
+    showToast(`Store "${name}" created!`, 'success');
+    await loadAll();
+  });
+
+  // ── Edit store ──
+  window.editStore = (storeId) => {
+    editingStore = stores.find(s => s.id === storeId);
+    if (!editingStore) return;
+    document.getElementById('es-alert').innerHTML = '';
+    document.getElementById('es-name').value = editingStore.name;
+    document.getElementById('es-gst').value  = editingStore.gst_number || '';
+    document.getElementById('es-plan').value = editingStore.plan_level;
+    openModal('edit-store-modal');
+  };
+
+  document.getElementById('es-submit').addEventListener('click', async () => {
+    if (!editingStore) return;
+    const alertEl = document.getElementById('es-alert');
+    const name = document.getElementById('es-name').value.trim();
+    const gst  = document.getElementById('es-gst').value.trim() || null;
+    const plan = parseInt(document.getElementById('es-plan').value);
+    if (!name) return alertEl.innerHTML = '<div class="alert alert-danger">Store name is required.</div>';
+
+    const btn = document.getElementById('es-submit');
+    btn.disabled = true; btn.innerHTML = 'Saving...';
+
+    const { error } = await supabase.from('stores').update({ name, gst_number: gst, plan_level: plan }).eq('id', editingStore.id);
+    btn.disabled = false; btn.innerHTML = 'Save Changes';
+
+    if (error) return alertEl.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+
+    closeModal('edit-store-modal');
+    showToast('Store updated', 'success');
+    await loadAll();
+  });
+
+  // ── Delete store ──
+  let deletingStoreId = null;
+  window.deleteStore = (storeId, storeName) => {
+    deletingStoreId = storeId;
+    document.getElementById('del-store-name').textContent = `Store: "${storeName}"`;
+    openModal('del-store-modal');
+  };
+
+  document.getElementById('del-store-submit').addEventListener('click', async () => {
+    if (!deletingStoreId) return;
+    const btn = document.getElementById('del-store-submit');
+    btn.disabled = true; btn.innerHTML = 'Deleting...';
+
+    // Delete products first (RLS may block cascade), then store
+    await supabase.from('products').delete().eq('store_id', deletingStoreId);
+    const { error } = await supabase.from('stores').delete().eq('id', deletingStoreId);
+
+    btn.disabled = false; btn.innerHTML = 'Delete Store';
+
+    if (error) { showToast('Delete failed: ' + error.message, 'error'); return; }
+
+    closeModal('del-store-modal');
+    showToast('Store deleted', 'success');
+    deletingStoreId = null;
+    await loadAll();
+  });
+
+  // ── Assign user ──
+  document.getElementById('new-store-btn'); // already wired
+  window.openAssignForUser = (userId) => {
+    document.getElementById('au-alert').innerHTML = '';
+    document.getElementById('au-user').value  = userId;
+    document.getElementById('au-store').value = '';
+    document.getElementById('au-role').value  = 'staff';
+    openModal('assign-user-modal');
+  };
+
+  // Also wire the standalone assign button (from stores tab context)
+  window.openAssignModal = () => {
+    document.getElementById('au-alert').innerHTML = '';
+    document.getElementById('au-user').value  = '';
+    document.getElementById('au-store').value = '';
+    document.getElementById('au-role').value  = 'staff';
+    openModal('assign-user-modal');
+  };
+
+  document.getElementById('au-submit').addEventListener('click', async () => {
+    const alertEl = document.getElementById('au-alert');
+    const uid   = document.getElementById('au-user').value;
+    const sid   = document.getElementById('au-store').value;
+    const role  = document.getElementById('au-role').value;
+    if (!uid)  return alertEl.innerHTML = '<div class="alert alert-danger">Select a user.</div>';
+    if (!sid)  return alertEl.innerHTML = '<div class="alert alert-danger">Select a store.</div>';
+
+    // Check plan limit
+    const store = stores.find(s=>s.id===sid);
+    const currentCount = allUsers.filter(u=>u.store_id===sid).length;
+    const maxU = window.PLAN_LIMITS[store?.plan_level||1];
+    if (maxU !== Infinity && currentCount >= maxU) {
+      return alertEl.innerHTML = `<div class="alert alert-danger">Store is at user limit (${maxU}). Upgrade the plan first.</div>`;
+    }
+
+    const btn = document.getElementById('au-submit');
+    btn.disabled = true; btn.innerHTML = 'Assigning...';
+
+    const { error } = await supabase.from('users').update({ store_id: sid, role }).eq('id', uid);
+    btn.disabled = false; btn.innerHTML = 'Assign';
+
+    if (error) return alertEl.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+
+    closeModal('assign-user-modal');
+    showToast('User assigned to store', 'success');
+    await loadAll();
+  });
+
+  })();
+</script>
+</body>
+</html>

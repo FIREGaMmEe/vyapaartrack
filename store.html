@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Store – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { supabase, requireAuth } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+  import { showToast, openModal, closeModal, esc } from './js/utils.js';
+
+  (async () => {
+    const user = await requireAuth();
+    if (!user) return;
+
+    const container = renderLayout('store', user.id);
+    document.title = 'Store – VyaparTrack';
+    document.getElementById('topbar-title').textContent = 'Store';
+
+    if (!user.profile?.store_id) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">🏪</div><h3>No store assigned</h3><p>Contact your admin.</p></div>`;
+      return;
+    }
+
+    const storeId = user.profile.store_id;
+    const isOwner = user.profile.role === 'owner';
+
+    container.innerHTML = `<div style="text-align:center;padding:60px;"><div class="spinner"></div></div>`;
+
+    const [{ data: store }, { data: members }] = await Promise.all([
+      supabase.from('stores').select('*').eq('id', storeId).single(),
+      supabase.from('users').select('id, role, name').eq('store_id', storeId)
+    ]);
+
+    if (!store) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">❌</div><h3>Store not found</h3></div>`;
+      return;
+    }
+
+    const plan = store.plan_level || 1;
+    const maxU = window.PLAN_LIMITS[plan];
+    const userCount = members?.length || 0;
+    const pct = maxU === Infinity ? 0 : Math.min(100, (userCount / maxU) * 100);
+    const canAdd = isOwner && (maxU === Infinity || userCount < maxU);
+
+    function renderPage() {
+      container.innerHTML = `
+        <div style="max-width:720px;">
+          <div style="margin-bottom:20px;"><h1>Store Settings</h1><p>Manage your store info and team</p></div>
+
+          <!-- Store Info -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-header">
+              <h3>🏪 Store Information</h3>
+              ${isOwner ? `<button class="btn btn-outline btn-sm" id="edit-store-btn">✏️ Edit</button>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
+              <div id="store-logo-wrap" style="width:72px;height:72px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--surface-2);flex-shrink:0;">
+                ${store.logo_url
+                  ? `<img src="${esc(store.logo_url)}" style="width:100%;height:100%;object-fit:contain;" />`
+                  : `<span style="font-size:1.8rem;">🏪</span>`}
+              </div>
+              <div>
+                <div style="font-weight:700;font-size:1.1rem;">${esc(store.name)}</div>
+                ${store.city ? `<div style="font-size:.85rem;color:var(--text-muted);">${esc(store.city)}</div>` : ''}
+                ${isOwner ? `<label class="btn btn-outline btn-sm" style="margin-top:8px;cursor:pointer;">
+                  📷 Change Logo <input type="file" id="logo-upload" accept="image/*" style="display:none;" />
+                </label>` : ''}
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;" id="store-details">
+              <div><div class="detail-label">Store Name</div><div class="detail-value">${esc(store.name)}</div></div>
+              <div><div class="detail-label">Phone</div><div class="detail-value">${esc(store.phone) || '—'}</div></div>
+              <div><div class="detail-label">Email</div><div class="detail-value">${esc(store.email) || '—'}</div></div>
+              <div><div class="detail-label">GST Number</div><div class="detail-value">${esc(store.gst_number) || '—'}</div></div>
+              <div style="grid-column:1/-1;"><div class="detail-label">Address</div><div class="detail-value">${esc(store.address) || '—'}${store.city ? ', ' + esc(store.city) : ''}</div></div>
+              <div><div class="detail-label">Plan</div><div class="detail-value"><span class="badge badge-primary">Level ${plan} – ${window.PLAN_NAMES[plan]}</span></div></div>
+              <div><div class="detail-label">Since</div><div class="detail-value">${new Date(store.created_at).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</div></div>
+            </div>
+          </div>
+
+          <!-- Team -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-header">
+              <h3>👥 Team Members</h3>
+              ${canAdd ? `<button class="btn btn-primary btn-sm" id="add-user-btn">+ Add User</button>` : ''}
+            </div>
+            <div style="margin-bottom:16px;">
+              <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:6px;">
+                <span style="color:var(--text-muted);">Users</span>
+                <span style="font-weight:600;">${userCount} / ${maxU === Infinity ? 'Unlimited' : maxU}</span>
+              </div>
+              ${maxU !== Infinity ? `<div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${pct >= 90 ? 'var(--danger)' : pct >= 70 ? 'var(--warning)' : 'var(--primary)'};"></div></div>` : ''}
+            </div>
+            ${!canAdd && isOwner ? `<div class="alert alert-warning">⚠️ User limit reached for Level ${plan}. Contact support to upgrade.</div>` : ''}
+            <div>
+              ${(members || []).map(m => `
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);">
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="width:36px;height:36px;border-radius:50%;background:var(--primary-light);color:var(--primary);display:flex;align-items:center;justify-content:center;font-size:.9rem;">${m.role === 'owner' ? '👑' : '👤'}</div>
+                    <div>
+                      <div style="font-size:.875rem;font-weight:500;">${esc(m.name) || '<span style="color:var(--text-muted);">Unnamed</span>'}</div>
+                      <div style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">${m.id.slice(0, 12)}...</div>
+                    </div>
+                  </div>
+                  <span class="badge ${m.role === 'owner' ? 'badge-primary' : 'badge-gray'}">${m.role}</span>
+                </div>`).join('')}
+            </div>
+          </div>
+
+          <!-- Plan overview -->
+          <div class="card">
+            <h3 style="margin-bottom:16px;">📋 Plan Overview</h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;">
+              ${Object.entries(window.PLAN_LIMITS).map(([lvl, lim]) => `
+                <div style="padding:12px;border-radius:var(--radius-sm);border:2px solid ${parseInt(lvl) === plan ? 'var(--primary)' : 'var(--border)'};background:${parseInt(lvl) === plan ? 'var(--primary-light)' : 'var(--surface-2)'};">
+                  <div style="font-weight:700;font-size:.88rem;color:${parseInt(lvl) === plan ? 'var(--primary)' : 'var(--text)'};">Level ${lvl}</div>
+                  <div style="font-size:.75rem;color:var(--text-muted);">${window.PLAN_NAMES[lvl]}</div>
+                  <div style="font-size:.85rem;font-weight:600;margin-top:4px;">${lim === Infinity ? 'Unlimited' : lim} users</div>
+                  ${parseInt(lvl) === plan ? '<div style="font-size:.68rem;color:var(--primary);margin-top:2px;">Current</div>' : ''}
+                </div>`).join('')}
+            </div>
+            <div style="margin-top:16px;text-align:center;">
+              <a href="https://wa.me/919328820394?text=Hi%2C%20I%20want%20to%20upgrade%20my%20VyaparTrack%20plan" target="_blank" class="btn btn-whatsapp btn-sm">💬 Contact to Upgrade</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Edit Store Modal -->
+        <div class="modal-overlay" id="edit-store-modal">
+          <div class="modal">
+            <div class="modal-header"><h3>✏️ Edit Store Info</h3><button class="btn btn-ghost" onclick="closeModal('edit-store-modal')">✕</button></div>
+            <div class="modal-body">
+              <div id="edit-store-alert"></div>
+              <div class="form-group"><label class="form-label">Store Name <span class="req">*</span></label><input type="text" id="es-name" class="form-control" value="${esc(store.name)}" /></div>
+              <div class="form-row">
+                <div class="form-group"><label class="form-label">Phone</label><input type="tel" id="es-phone" class="form-control" value="${esc(store.phone) || ''}" placeholder="+91 98765 43210" /></div>
+                <div class="form-group"><label class="form-label">Email</label><input type="email" id="es-email" class="form-control" value="${esc(store.email) || ''}" placeholder="shop@example.com" /></div>
+              </div>
+              <div class="form-group"><label class="form-label">Address</label><textarea id="es-address" class="form-control" placeholder="Shop No, Street, Area">${esc(store.address) || ''}</textarea></div>
+              <div class="form-row">
+                <div class="form-group"><label class="form-label">City</label><input type="text" id="es-city" class="form-control" value="${esc(store.city) || ''}" placeholder="Ahmedabad" /></div>
+                <div class="form-group"><label class="form-label">GST Number</label><input type="text" id="es-gst" class="form-control" value="${esc(store.gst_number) || ''}" placeholder="22AAAAA0000A1Z5" /></div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('edit-store-modal')">Cancel</button>
+              <button class="btn btn-primary" id="save-store-btn">Save Changes</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add User Modal -->
+        <div class="modal-overlay" id="add-user-modal">
+          <div class="modal">
+            <div class="modal-header"><h3>➕ Add Team Member</h3><button class="btn btn-ghost" onclick="closeModal('add-user-modal')">✕</button></div>
+            <div class="modal-body">
+              <div id="add-user-alert"></div>
+              <div class="alert alert-info">ℹ️ The user must already have a VyaparTrack account. Enter their User ID.</div>
+              <div class="form-group"><label class="form-label">User ID <span class="req">*</span></label><input type="text" id="new-uid" class="form-control" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></div>
+              <div class="form-group"><label class="form-label">Role</label><select id="new-role" class="form-control"><option value="staff">Staff</option><option value="owner">Owner</option></select></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-outline" onclick="closeModal('add-user-modal')">Cancel</button>
+              <button class="btn btn-primary" id="confirm-add-btn">Add User</button>
+            </div>
+          </div>
+        </div>`;
+
+      window.openModal = openModal;
+      window.closeModal = closeModal;
+      document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); }));
+
+      document.getElementById('edit-store-btn')?.addEventListener('click', () => openModal('edit-store-modal'));
+
+      document.getElementById('save-store-btn')?.addEventListener('click', async () => {
+        const alertEl = document.getElementById('edit-store-alert');
+        alertEl.innerHTML = '';
+        const name    = document.getElementById('es-name').value.trim();
+        const phone   = document.getElementById('es-phone').value.trim() || null;
+        const email   = document.getElementById('es-email').value.trim() || null;
+        const address = document.getElementById('es-address').value.trim() || null;
+        const city    = document.getElementById('es-city').value.trim() || null;
+        const gst     = document.getElementById('es-gst').value.trim() || null;
+        if (!name) return alertEl.innerHTML = '<div class="alert alert-danger">Store name is required.</div>';
+        const btn = document.getElementById('save-store-btn');
+        btn.disabled = true; btn.innerHTML = 'Saving...';
+        const { error } = await supabase.from('stores').update({ name, phone, email, address, city, gst_number: gst }).eq('id', storeId);
+        btn.disabled = false; btn.innerHTML = 'Save Changes';
+        if (error) return alertEl.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+        // Update local store object
+        Object.assign(store, { name, phone, email, address, city, gst_number: gst });
+        closeModal('edit-store-modal');
+        showToast('Store updated!', 'success');
+        renderPage(); // re-render with new values
+      });
+
+      document.getElementById('add-user-btn')?.addEventListener('click', () => openModal('add-user-modal'));
+
+      document.getElementById('confirm-add-btn')?.addEventListener('click', async () => {
+        const uid  = document.getElementById('new-uid').value.trim();
+        const role = document.getElementById('new-role').value;
+        const alertEl = document.getElementById('add-user-alert');
+        if (!uid) return alertEl.innerHTML = '<div class="alert alert-danger">User ID is required.</div>';
+        const btn = document.getElementById('confirm-add-btn');
+        btn.disabled = true;
+        const { error } = await supabase.from('users').update({ store_id: storeId, role }).eq('id', uid);
+        btn.disabled = false;
+        if (error) return alertEl.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+        closeModal('add-user-modal');
+        showToast('User added!', 'success');
+        setTimeout(() => location.reload(), 600);
+      });
+    }
+
+    renderPage();
+
+    // Logo upload — wired after DOM renders
+    function wireLogo() {
+      const input = document.getElementById('logo-upload');
+      if (!input) return;
+      input.addEventListener('change', async () => {
+        const file = input.files[0];
+        if (!file || !file.type.startsWith('image/')) return showToast('Select an image file', 'error');
+        const ext  = file.name.split('.').pop();
+        const path = `${storeId}/logo.${ext}`;
+        showToast('Uploading logo...', 'default');
+        const { error: upErr } = await supabase.storage.from('store-logos').upload(path, file, { upsert: true });
+        if (upErr) return showToast('Upload failed: ' + upErr.message, 'error');
+        const { data: { publicUrl } } = supabase.storage.from('store-logos').getPublicUrl(path);
+        const { error: dbErr } = await supabase.from('stores').update({ logo_url: publicUrl }).eq('id', storeId);
+        if (dbErr) return showToast('Failed to save logo', 'error');
+        store.logo_url = publicUrl;
+        const wrap = document.getElementById('store-logo-wrap');
+        if (wrap) wrap.innerHTML = `<img src="${publicUrl}" style="width:100%;height:100%;object-fit:contain;" />`;
+        showToast('Logo updated!', 'success');
+      });
+    }
+    wireLogo();
+  })();
+</script>
+</body>
+</html>

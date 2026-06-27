@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+  <style>
+    .stat-card { cursor: pointer; transition: transform .15s, box-shadow .15s; }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+    .stat-card:active { transform: translateY(0); }
+  </style>
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { supabase, requireAuth } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+  import { fmt, fmtDate, showToast, setCache, getCache, esc } from './js/utils.js';
+
+  (async () => {
+    const user = await requireAuth();
+    if (!user) return;
+
+    const container = renderLayout('dashboard', user.id);
+    document.title = 'Dashboard – VyaparTrack';
+    document.getElementById('topbar-title').textContent = 'Dashboard';
+    document.getElementById('user-badge').textContent = user.profile?.name || user.email?.split('@')[0] || '';
+
+    if (!user.profile?.store_id) {
+      container.innerHTML = `
+        <div class="empty-state" style="padding:80px 24px;">
+          <div class="empty-icon">🏪</div>
+          <h3>No store assigned</h3>
+          <p>Your account isn't linked to a store yet.<br>Ask your admin to assign you.</p>
+          <p style="margin-top:10px;font-size:.8rem;background:var(--surface-2);padding:8px 12px;border-radius:var(--radius-sm);display:inline-block;">
+            Your User ID: <strong>${user.id}</strong>
+          </p><br>
+          <button onclick="import('./js/supabase.js').then(m=>m.signOut())" class="btn btn-outline" style="margin-top:16px;">Sign Out</button>
+        </div>`;
+      return;
+    }
+
+    const storeId   = user.profile.store_id;
+    const storeName = user.profile.stores?.name || 'My Store';
+    const greet     = () => { const h = new Date().getHours(); return h<12?'morning':h<17?'afternoon':'evening'; };
+
+    container.innerHTML = `
+      <div style="margin-bottom:20px;">
+        <h1>Good ${greet()}, ${esc(user.profile?.name || user.email.split('@')[0])} 👋</h1>
+        <p>${esc(storeName)}</p>
+      </div>
+
+      <div class="stats-grid" id="stats-grid">
+        ${[
+          { icon:'📦', label:'Total Products', color:'#2563eb', bg:'#eff6ff', link:'inventory.html' },
+          { icon:'🟢', label:'In Stock',       color:'#16a34a', bg:'#f0fdf4', link:'inventory.html?status=in_stock' },
+          { icon:'✅', label:'Sold',           color:'#d97706', bg:'#fffbeb', link:'inventory.html?status=sold' },
+          { icon:'💰', label:'Total Profit',   color:'#7c3aed', bg:'#f5f3ff', link:'coming-soon.html?feature=Reports' },
+        ].map(c => `
+          <div class="stat-card" onclick="location.href='${c.link}'" title="Click to view">
+            <div class="stat-icon" style="background:${c.bg};color:${c.color};">${c.icon}</div>
+            <div class="stat-value" style="color:${c.color};" id="sv-${c.label.replace(/\s/g,'-')}">—</div>
+            <div class="stat-label">${c.label}</div>
+          </div>`).join('')}
+      </div>
+
+      <!-- Quick actions -->
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px;">
+        <a href="add.html" class="btn btn-primary">➕ Add Product</a>
+        <a href="inventory.html" class="btn btn-outline">📦 View Inventory</a>
+        <a href="coming-soon.html?feature=Reports" class="btn btn-outline">📊 Reports</a>
+        <a href="coming-soon.html?feature=Expenses" class="btn btn-outline">💸 Expenses</a>
+      </div>
+
+      <div class="charts-grid">
+        <div class="card" style="cursor:pointer;" onclick="location.href='coming-soon.html?feature=Sales+Analytics'">
+          <div class="card-header"><h3>Monthly Sales</h3><span style="font-size:.75rem;color:var(--text-muted);">Click for details →</span></div>
+          <div class="chart-wrap"><canvas id="chart-sales"></canvas></div>
+        </div>
+        <div class="card" style="cursor:pointer;" onclick="location.href='coming-soon.html?feature=Profit+Analytics'">
+          <div class="card-header"><h3>Profit Trend</h3><span style="font-size:.75rem;color:var(--text-muted);">Click for details →</span></div>
+          <div class="chart-wrap"><canvas id="chart-profit"></canvas></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Recent Sales</h3>
+          <a href="inventory.html?status=sold" class="btn btn-outline btn-sm">View All</a>
+        </div>
+        <div id="recent-sales"><div style="text-align:center;padding:24px;"><div class="spinner"></div></div></div>
+      </div>`;
+
+    const cached = await getCache(`dash_${storeId}`);
+    if (cached) renderStats(cached);
+
+    const { data: products, error } = await supabase
+      .from('products').select('*').eq('store_id', storeId).order('created_at', { ascending: false });
+
+    if (error) { showToast('Failed to load data', 'error'); return; }
+
+    const stats = calcStats(products || []);
+    await setCache(`dash_${storeId}`, stats);
+    renderStats(stats);
+    drawChart('chart-sales',  stats.months, stats.salesData,  '#2563eb');
+    drawChart('chart-profit', stats.months, stats.profitData, '#16a34a');
+    renderRecent(products || []);
+
+    function calcStats(ps) {
+      const total   = ps.length;
+      const inStock = ps.filter(p => p.status === 'in_stock').length;
+      const sold    = ps.filter(p => p.status === 'sold').length;
+      let profit = 0;
+      const mSales = {}, mProfit = {};
+      ps.forEach(p => {
+        if (p.status === 'sold') {
+          const pr = (p.sell_price||0) - (p.purchase_price||0);
+          profit += pr;
+          const m = p.sell_date
+            ? new Date(p.sell_date).toLocaleDateString('en-IN', { month:'short', year:'2-digit' })
+            : 'Unknown';
+          mSales[m]  = (mSales[m]  || 0) + 1;
+          mProfit[m] = (mProfit[m] || 0) + pr;
+        }
+      });
+      const months = Object.keys(mSales).slice(-6);
+      return { total, inStock, sold, profit, months,
+        salesData:  months.map(m => mSales[m]  || 0),
+        profitData: months.map(m => mProfit[m] || 0) };
+    }
+
+    function renderStats(s) {
+      const vals = { 'Total-Products': s.total, 'In-Stock': s.inStock, 'Sold': s.sold, 'Total-Profit': fmt(s.profit) };
+      Object.entries(vals).forEach(([k, v]) => {
+        const el = document.getElementById(`sv-${k}`);
+        if (el) el.textContent = v;
+      });
+    }
+
+    function drawChart(id, labels, data, color) {
+      const canvas = document.getElementById(id);
+      if (!canvas) return;
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const tc = isDark ? '#94a3b8' : '#6b7280';
+      const gc = isDark ? '#334155' : '#e5e7eb';
+      canvas.width  = canvas.offsetWidth || 400;
+      canvas.height = 200;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      const pad = { t:20, r:20, b:40, l:60 };
+      const cW = W-pad.l-pad.r, cH = H-pad.t-pad.b;
+      ctx.clearRect(0, 0, W, H);
+      if (!data.length || data.every(d => d === 0)) {
+        ctx.fillStyle = tc; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('No data yet', W/2, H/2); return;
+      }
+      const maxV = Math.max(...data) * 1.2 || 1;
+      const bW = (cW/data.length) * .6, gap = (cW/data.length) * .4;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.t + cH - (i/4) * cH;
+        ctx.strokeStyle = gc; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+cW, y); ctx.stroke();
+        ctx.fillStyle = tc; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+        const v = maxV * i / 4;
+        ctx.fillText(v >= 1000 ? `${(v/1000).toFixed(1)}k` : Math.round(v), pad.l-6, y+3);
+      }
+      data.forEach((v, i) => {
+        const x = pad.l + i*(cW/data.length) + gap/2;
+        const bH = (v/maxV) * cH, y = pad.t + cH - bH;
+        ctx.fillStyle = color;
+        if (ctx.roundRect) ctx.roundRect(x, y, bW, bH, 3); else ctx.rect(x, y, bW, bH);
+        ctx.fill();
+        ctx.fillStyle = tc; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(labels[i] || '', x + bW/2, H - pad.b + 14);
+      });
+    }
+
+    function renderRecent(ps) {
+      const el = document.getElementById('recent-sales');
+      if (!el) return;
+      const sold = ps.filter(p => p.status === 'sold').slice(0, 5);
+      if (!sold.length) {
+        el.innerHTML = `<div class="empty-state"><div class="empty-icon">📭</div><h3>No sales yet</h3><p>Add products and mark them as sold</p><a href="add.html" class="btn btn-primary" style="margin-top:12px;">Add Product</a></div>`;
+        return;
+      }
+      el.innerHTML = `
+        <div class="table-wrap" style="border:none;border-radius:0;">
+          <table>
+            <thead><tr><th>Model</th><th>IMEI</th><th>Sell Price</th><th>Profit</th><th>Date</th><th></th></tr></thead>
+            <tbody>${sold.map(p => `
+              <tr style="cursor:pointer;" onclick="location.href='product.html?id=${p.id}'">
+                <td><strong>${esc(p.model)}</strong></td>
+                <td style="font-family:monospace;font-size:.8rem;">${esc(p.imei_1)}</td>
+                <td>${fmt(p.sell_price)}</td>
+                <td style="color:var(--success);">${fmt((p.sell_price||0)-(p.purchase_price||0))}</td>
+                <td style="font-size:.82rem;">${fmtDate(p.sell_date)}</td>
+                <td><a href="product.html?id=${p.id}" class="btn btn-outline btn-sm" onclick="event.stopPropagation()">View</a></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    }
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Profile – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+  <style>
+    .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
+    @media (max-width: 480px) { .profile-grid { grid-template-columns: 1fr; } }
+    .profile-avatar {
+      width: 64px; height: 64px; border-radius: 50%;
+      background: var(--primary-light); color: var(--primary);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.6rem; font-weight: 700; flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { supabase, requireAuth, signOut } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+  import { showToast, esc } from './js/utils.js';
+
+  (async () => {
+    const user = await requireAuth();
+    if (!user) return;
+
+    const container = renderLayout('profile', user.id);
+    document.title = 'Profile – VyaparTrack';
+    document.getElementById('topbar-title').textContent = 'Profile';
+
+    const store   = user.profile?.stores || {};
+    const name    = user.profile?.name   || '';
+    const email   = user.email || '';
+    const role    = user.profile?.role   || 'staff';
+    const initial = (name || email || '?')[0].toUpperCase();
+
+    document.getElementById('user-badge').textContent = name || email.split('@')[0];
+
+    function render(editMode) {
+      container.innerHTML = `
+        <div style="max-width:560px;">
+          <div style="margin-bottom:20px;"><h1>My Profile</h1><p>Manage your account details</p></div>
+
+          <!-- Account card -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-header" style="margin-bottom:20px;">
+              <h3>👤 Account Info</h3>
+              <button class="btn btn-outline btn-sm" id="toggle-edit">${editMode ? '✕ Cancel' : '✏️ Edit'}</button>
+            </div>
+
+            ${editMode ? `
+              <!-- EDIT MODE -->
+              <div id="profile-alert"></div>
+              <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;">
+                <div class="profile-avatar" id="avatar-el">${initial}</div>
+                <div style="flex:1;">
+                  <div style="font-size:.8rem;color:var(--text-muted);">${esc(email)}</div>
+                  <div style="font-size:.82rem;color:var(--text-muted);">${role === 'owner' ? '👑 Owner' : '👤 Staff'} · ${esc(store.name || 'No Store')}</div>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Display Name</label>
+                <input type="text" id="edit-name" class="form-control" placeholder="Your full name" value="${esc(name)}" />
+                <span class="form-hint">Shown to other store members</span>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Email</label>
+                <input type="email" id="edit-email" class="form-control" value="${esc(email)}" />
+                <span class="form-hint">Changing email requires re-verification</span>
+              </div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                <button class="btn btn-primary" id="save-profile-btn">Save Changes</button>
+                <button class="btn btn-outline" id="cancel-edit-btn">Cancel</button>
+              </div>
+            ` : `
+              <!-- VIEW MODE -->
+              <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap;">
+                <div class="profile-avatar">${initial}</div>
+                <div>
+                  <div style="font-weight:600;font-size:1rem;">${esc(name) || '<span style="color:var(--text-muted);font-weight:400;">No name set</span>'}</div>
+                  <div style="font-size:.85rem;color:var(--text-muted);">${esc(email)}</div>
+                  <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px;">${role === 'owner' ? '👑 Store Owner' : '👤 Staff'} · ${esc(store.name || 'No Store')}</div>
+                </div>
+              </div>
+              <div class="profile-grid">
+                <div><div class="detail-label">Display Name</div><div class="detail-value">${esc(name) || '—'}</div></div>
+                <div><div class="detail-label">Email</div><div class="detail-value" style="word-break:break-all;">${esc(email)}</div></div>
+                <div><div class="detail-label">Role</div><div class="detail-value">${role}</div></div>
+                <div><div class="detail-label">Store</div><div class="detail-value">${esc(store.name || '—')}</div></div>
+                <div><div class="detail-label">Plan</div><div class="detail-value"><span class="badge badge-primary">Level ${store.plan_level || 1} – ${window.PLAN_NAMES[store.plan_level || 1]}</span></div></div>
+                <div><div class="detail-label">User ID</div><div class="detail-value" style="font-family:monospace;font-size:.72rem;word-break:break-all;">${user.id}</div></div>
+              </div>
+            `}
+          </div>
+
+          <!-- Change password -->
+          <div class="card" style="margin-bottom:16px;">
+            <h3 style="margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border);">🔒 Change Password</h3>
+            <div id="pw-alert"></div>
+            <div class="form-group">
+              <label class="form-label">New Password</label>
+              <input type="password" id="new-pw" class="form-control" placeholder="Min 8 characters" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Confirm Password</label>
+              <input type="password" id="conf-pw" class="form-control" placeholder="Repeat password" />
+            </div>
+            <button class="btn btn-primary" id="change-pw-btn">Update Password</button>
+          </div>
+
+          <!-- Sign out -->
+          <div class="card" style="border-color:var(--danger);">
+            <h3 style="margin-bottom:10px;color:var(--danger);">⚠️ Sign Out</h3>
+            <p style="margin-bottom:16px;font-size:.875rem;">Sign out from your current session.</p>
+            <button class="btn btn-danger" id="signout-btn">🚪 Sign Out</button>
+          </div>
+        </div>`;
+
+      // Toggle edit
+      document.getElementById('toggle-edit').addEventListener('click', () => render(!editMode));
+      document.getElementById('cancel-edit-btn')?.addEventListener('click', () => render(false));
+
+      // Save profile
+      document.getElementById('save-profile-btn')?.addEventListener('click', async () => {
+        const alertEl  = document.getElementById('profile-alert');
+        alertEl.innerHTML = '';
+        const newName  = document.getElementById('edit-name').value.trim();
+        const newEmail = document.getElementById('edit-email').value.trim();
+        if (!newEmail) return alertEl.innerHTML = '<div class="alert alert-danger">Email cannot be empty.</div>';
+
+        const btn = document.getElementById('save-profile-btn');
+        btn.disabled = true; btn.innerHTML = 'Saving...';
+
+        const { error: nameErr } = await supabase
+          .from('users').update({ name: newName || null }).eq('id', user.id);
+
+        let emailErr = null;
+        if (newEmail !== email) {
+          const { error } = await supabase.auth.updateUser({ email: newEmail });
+          emailErr = error;
+        }
+
+        btn.disabled = false; btn.innerHTML = 'Save Changes';
+        if (nameErr) return alertEl.innerHTML = `<div class="alert alert-danger">${nameErr.message}</div>`;
+        if (emailErr) return alertEl.innerHTML = `<div class="alert alert-danger">${emailErr.message}</div>`;
+
+        // Update local state and re-render view mode
+        user.profile.name = newName;
+        user.email = newEmail;
+        document.getElementById('user-badge').textContent = newName || newEmail.split('@')[0];
+        showToast('Profile saved', 'success');
+        render(false);
+      });
+
+      // Change password
+      document.getElementById('change-pw-btn').addEventListener('click', async () => {
+        const alertEl = document.getElementById('pw-alert');
+        alertEl.innerHTML = '';
+        const np = document.getElementById('new-pw').value;
+        const cp = document.getElementById('conf-pw').value;
+        if (!np || np.length < 8) return alertEl.innerHTML = '<div class="alert alert-danger">Password must be at least 8 characters.</div>';
+        if (np !== cp) return alertEl.innerHTML = '<div class="alert alert-danger">Passwords do not match.</div>';
+        const btn = document.getElementById('change-pw-btn');
+        btn.disabled = true; btn.innerHTML = 'Updating...';
+        const { error } = await supabase.auth.updateUser({ password: np });
+        btn.disabled = false; btn.innerHTML = 'Update Password';
+        if (error) return alertEl.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+        alertEl.innerHTML = '<div class="alert alert-success">✓ Password updated!</div>';
+        document.getElementById('new-pw').value = '';
+        document.getElementById('conf-pw').value = '';
+      });
+
+      document.getElementById('signout-btn').addEventListener('click', signOut);
+    }
+
+    render(false);
+  })();
+</script>
+</body>
+</html>

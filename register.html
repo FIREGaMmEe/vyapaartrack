@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Create Account – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+</head>
+<body>
+<script src="js/config.js"></script>
+
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <img id="auth-logo" src="assets/Logo.png" alt="VyaparTrack" />
+    </div>
+    <h2 style="text-align:center;margin-bottom:4px;">Create account</h2>
+    <p style="text-align:center;font-size:.875rem;margin-bottom:24px;">Register to get started with VyaparTrack</p>
+
+    <div id="reg-alert"></div>
+
+    <!-- Success state (hidden by default) -->
+    <div id="reg-success" style="display:none;">
+      <div class="alert alert-success" style="margin-bottom:20px;">
+        ✅ Account created! Check your email to confirm your address.
+      </div>
+      <div style="background:var(--surface-2);border-radius:var(--radius);padding:16px;margin-bottom:20px;font-size:.875rem;">
+        <strong>Next step:</strong> Share your User ID with your store admin so they can assign you to a store.
+        <div id="new-user-id" style="font-family:monospace;font-size:.8rem;margin-top:8px;padding:8px;background:var(--surface);border-radius:var(--radius-sm);border:1px solid var(--border);word-break:break-all;"></div>
+        <button class="btn btn-outline btn-sm" id="copy-id-btn" style="margin-top:8px;">📋 Copy User ID</button>
+      </div>
+      <a href="login.html" class="btn btn-primary btn-full">Go to Sign In</a>
+    </div>
+
+    <!-- Form (shown by default) -->
+    <div id="reg-form">
+      <div class="form-group">
+        <label class="form-label">Your Name</label>
+        <input type="text" id="reg-name" class="form-control" placeholder="Ramesh Kumar" autocomplete="name" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email <span class="req">*</span></label>
+        <input type="email" id="reg-email" class="form-control" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password <span class="req">*</span></label>
+        <input type="password" id="reg-password" class="form-control" placeholder="Min 8 characters" autocomplete="new-password" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirm Password <span class="req">*</span></label>
+        <input type="password" id="reg-confirm" class="form-control" placeholder="Repeat password" autocomplete="new-password" />
+      </div>
+      <button class="btn btn-primary btn-full btn-lg" id="register-btn">Create Account</button>
+
+      <div class="divider">or</div>
+      <button class="social-btn" id="google-reg-btn">
+        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="G" />
+        Continue with Google
+      </button>
+
+      <div style="background:var(--surface-2);border-radius:var(--radius-sm);padding:12px;margin-top:16px;font-size:.8rem;color:var(--text-muted);">
+        ℹ️ After registering, your store admin needs to assign you to a store before you can use the app.
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:20px;font-size:.875rem;color:var(--text-muted);">
+      Already have an account?
+      <a href="login.html" style="color:var(--primary);font-weight:500;">Sign in</a>
+    </div>
+    <div style="text-align:center;margin-top:8px;">
+      <a href="index.html" style="font-size:.8rem;color:var(--text-muted);">← Back to home</a>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script type="module">
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+  import { initTheme, showToast } from './js/utils.js';
+
+  initTheme();
+
+  const sb = createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+    auth: { persistSession:true, autoRefreshToken:true, detectSessionInUrl:true, storageKey:'vt_auth' }
+  });
+
+  // If already logged in, go to dashboard
+  sb.auth.onAuthStateChange((_e, session) => {
+    if (session) window.location.href = 'dashboard.html';
+  });
+
+  const $ = id => document.getElementById(id);
+  function setAlert(msg, type = 'danger') {
+    $('reg-alert').innerHTML = msg ? `<div class="alert alert-${type}">${msg}</div>` : '';
+  }
+  function setLoading(on) {
+    const btn = $('register-btn');
+    btn.disabled = on;
+    btn.innerHTML = on
+      ? '<span class="spinner" style="width:16px;height:16px;border-width:2px;margin-right:6px;vertical-align:middle;"></span>Creating account...'
+      : 'Create Account';
+  }
+
+  // Register
+  const regBtn = $('register-btn');
+  regBtn.addEventListener('click', async () => {
+    setAlert('');
+    const name    = $('reg-name').value.trim();
+    const email   = $('reg-email').value.trim();
+    const pass    = $('reg-password').value;
+    const confirm = $('reg-confirm').value;
+
+    if (!email)              return setAlert('Email is required.');
+    if (!pass || pass.length < 8) return setAlert('Password must be at least 8 characters.');
+    if (pass !== confirm)    return setAlert('Passwords do not match.');
+
+    setLoading(true);
+    const { data, error } = await sb.auth.signUp({ email, password: pass });
+    setLoading(false);
+
+    if (error) return setAlert(error.message);
+
+    // Save name if provided
+    if (name && data.user) {
+      await sb.from('users').update({ name }).eq('id', data.user.id);
+    }
+
+    // Show success state
+    $('reg-form').style.display = 'none';
+    $('reg-success').style.display = '';
+    if (data.user) {
+      $('new-user-id').textContent = data.user.id;
+    }
+  });
+
+  $('reg-confirm').addEventListener('keydown', e => { if (e.key === 'Enter') regBtn.click(); });
+
+  // Copy user ID
+  $('copy-id-btn').addEventListener('click', () => {
+    const id = $('new-user-id').textContent;
+    navigator.clipboard.writeText(id).then(() => showToast('User ID copied!', 'success'));
+  });
+
+  // Google
+  $('google-reg-btn').addEventListener('click', async () => {
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: 'https://vyapartrack.yugfolio.me/dashboard.html' }
+    });
+    if (error) setAlert(error.message);
+  });
+</script>
+</body>
+</html>

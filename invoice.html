@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sales Note – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <style>
+    .sn {
+      background: #fff; color: #111;
+      max-width: 720px; margin: 0 auto;
+      padding: 40px 48px;
+      border: 1px solid #e5e7eb; border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px; line-height: 1.5;
+    }
+    .sn-header { display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:18px; border-bottom:3px solid #111; margin-bottom:24px; }
+    .sn-logo { max-height:64px; max-width:180px; object-fit:contain; }
+    .sn-logo-placeholder { width:64px; height:64px; background:#f3f4f6; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:1.8rem; }
+    .sn-store-name { font-size:1rem; font-weight:700; margin-top:6px; }
+    .sn-store-meta { font-size:.78rem; color:#555; line-height:1.7; margin-top:3px; }
+    .sn-header-right { text-align:right; }
+    .sn-doc-title { font-size:1.6rem; font-weight:900; letter-spacing:.04em; color:#111; }
+    .sn-number { font-size:.85rem; color:#555; margin-top:4px; }
+    .sn-date { font-size:.85rem; color:#555; }
+    .sn-info-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; margin-bottom:24px; padding-bottom:18px; border-bottom:1px solid #e5e7eb; }
+    .sn-info-label { font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#888; margin-bottom:5px; }
+    .sn-info-value { font-size:.85rem; color:#111; line-height:1.6; }
+    .sn-table { width:100%; border-collapse:collapse; margin-bottom:0; }
+    .sn-table thead tr { border-bottom:2px solid #111; }
+    .sn-table thead th { padding:9px 10px; text-align:left; font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#555; background:none; }
+    .sn-table thead th:last-child { text-align:right; }
+    .sn-table tbody td { padding:13px 10px; border-bottom:1px solid #f0f0f0; font-size:.875rem; color:#111; vertical-align:top; }
+    .sn-table tbody td:last-child { text-align:right; font-weight:600; }
+    .sn-item-name { font-weight:700; margin-bottom:3px; }
+    .sn-item-meta { font-size:.76rem; color:#666; line-height:1.6; }
+    .sn-totals { margin-left:auto; width:260px; margin-top:0; }
+    .sn-totals-row { display:flex; justify-content:space-between; padding:7px 0; font-size:.875rem; border-bottom:1px solid #f0f0f0; }
+    .sn-totals-row.total { font-size:1.05rem; font-weight:800; border-bottom:none; border-top:2px solid #111; padding-top:10px; margin-top:4px; }
+    .sn-totals-row.paid { font-size:.875rem; color:#16a34a; font-weight:600; border-bottom:none; }
+    .sn-totals-label { color:#555; }
+    .sn-totals-row.total .sn-totals-label { color:#111; }
+    .sn-bottom { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:28px; padding-top:20px; border-top:1px solid #e5e7eb; }
+    .sn-section-label { font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#888; margin-bottom:8px; }
+    .sn-terms-text { font-size:.75rem; color:#444; line-height:1.7; }
+    .sn-terms-text p { margin-bottom:6px; }
+    .sn-sign-box { border:1px solid #d1d5db; border-radius:6px; height:80px; display:flex; align-items:flex-end; padding:8px 12px; }
+    .sn-sign-label { font-size:.72rem; color:#888; }
+    .sn-stamp-wrap { display:flex; justify-content:center; align-items:center; margin-top:12px; opacity:.85; }
+    .sn-footer { margin-top:20px; padding-top:14px; border-top:1px solid #e5e7eb; text-align:center; font-size:.72rem; color:#aaa; }
+    .sn-notes { margin-top:20px; padding-top:16px; border-top:1px solid #e5e7eb; }
+    .sn-right-col { display:flex; flex-direction:column; gap:10px; }
+    @media print {
+      @page { size: A4 portrait; margin: 10mm 12mm; }
+      .no-print { display:none !important; }
+      .sidebar, .topbar { display:none !important; }
+      .main-content { margin-left:0 !important; padding:0 !important; }
+      .page-content { padding:0 !important; }
+      body { background:#fff !important; margin:0; padding:0; }
+      .sn { border:none; border-radius:0; padding:0; max-width:100%; width:100%; box-shadow:none; }
+      .sn-bottom { page-break-inside:avoid; }
+      .sn-table tbody tr { page-break-inside:avoid; }
+    }
+    @media (max-width:600px) {
+      .sn { padding:20px 14px; }
+      .sn-info-row { grid-template-columns:1fr; gap:14px; }
+      .sn-header { flex-direction:column; gap:10px; }
+      .sn-header-right { text-align:left; }
+      .sn-totals { width:100%; }
+      .sn-bottom { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { supabase, requireAuth } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+  import { fmt, fmtDate, esc, getYearCode } from './js/utils.js';
+
+  (async () => {
+    const user = await requireAuth();
+    if (!user) return;
+
+    const container = renderLayout('inventory', user.id);
+    document.title = 'Sales Note – VyaparTrack';
+    document.getElementById('topbar-title').textContent = 'Sales Note';
+
+    const id = new URLSearchParams(location.search).get('id');
+    if (!id) { location.href = 'inventory.html'; return; }
+
+    container.innerHTML = `<div style="text-align:center;padding:60px;"><div class="spinner"></div></div>`;
+
+    const { data: p, error } = await supabase.from('products').select('*')
+      .eq('id', id).eq('store_id', user.profile?.store_id).single();
+
+    if (error || !p) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">❌</div><h3>Not found</h3><a href="inventory.html" class="btn btn-primary" style="margin-top:12px;">Back</a></div>`;
+      return;
+    }
+
+    const store  = user.profile?.stores || {};
+    // Note number format: YYAAMM + 3-digit seq e.g. 26BB04101
+    // If not yet assigned, call the DB function to get the next sequential number and save it
+    const yearCode = getYearCode(); // e.g. "26BB04"
+    let noteNo = p.note_number;
+    if (!noteNo) {
+      const { data: seqData } = await supabase.rpc('get_next_note_number', {
+        p_store_id: user.profile?.store_id,
+        p_year_code: yearCode
+      });
+      noteNo = seqData || (yearCode + '101');
+      // Persist so the same number shows every time
+      await supabase.from('products').update({ note_number: noteNo }).eq('id', p.id);
+    }
+    const noteDate = fmtDate(p.sell_date || new Date().toISOString());
+
+    // Spec lines for item description
+    const specLines = [
+      p.storage && p.ram ? `${p.ram} / ${p.storage}` : (p.storage || p.ram || null),
+      p.color || null,
+      p.imei_1 ? `IMEI: ${p.imei_1}` : null,
+      p.imei_2 ? `IMEI 2: ${p.imei_2}` : null,
+      p.accessories ? `Accessories: ${p.accessories}` : null,
+    ].filter(Boolean);
+
+    // Payment summary
+    function paymentSummary(mode, cash, upi, due, cleared, upiRef) {
+      if (!mode) return 'Cash';
+      if (mode === 'cash') return `💵 Cash: ${fmt(cash||0)}`;
+      if (mode === 'upi')  return `📱 UPI: ${fmt(upi||0)}${upiRef ? ' · Ref: ' + esc(upiRef) : ''}`;
+      if (mode === 'mix')  return `💵 Cash: ${fmt(cash||0)} + 📱 UPI: ${fmt(upi||0)}${upiRef ? ' · Ref: ' + esc(upiRef) : ''}`;
+      if (mode === 'due') {
+        const paid = (cash||0)+(upi||0);
+        return `Paid: ${fmt(paid)} | Due: ${fmt(due||0)} ${cleared ? '✅ Cleared' : '⏳ Pending'}`;
+      }
+      return mode;
+    }
+
+    // Amount in words
+    function inWords(n) {
+      const o=['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+      const t=['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+      if(!n)return'Zero';if(n<20)return o[n];if(n<100)return t[Math.floor(n/10)]+(n%10?' '+o[n%10]:'');
+      if(n<1000)return o[Math.floor(n/100)]+' Hundred'+(n%100?' '+inWords(n%100):'');
+      if(n<100000)return inWords(Math.floor(n/1000))+' Thousand'+(n%1000?' '+inWords(n%1000):'');
+      if(n<10000000)return inWords(Math.floor(n/100000))+' Lakh'+(n%100000?' '+inWords(n%100000):'');
+      return inWords(Math.floor(n/10000000))+' Crore'+(n%10000000?' '+inWords(n%10000000):'');
+    }
+
+    const sellAmt  = p.sell_price || 0;
+    const amtWords = inWords(Math.round(sellAmt)) + ' Rupees Only';
+
+    const waText = encodeURIComponent(
+      `*Sales Note ${noteNo}*\n` +
+      `Store: ${store.name||'My Store'}\n` +
+      `Product: ${p.model}\nIMEI: ${p.imei_1}\n` +
+      `Amount: ${fmt(sellAmt)}\nDate: ${noteDate}\n` +
+      `Buyer: ${p.buyer_name||'—'}\n\nThank you for your purchase!`
+    );
+
+    const logoHtml = store.logo_url
+      ? `<img src="${esc(store.logo_url)}" class="sn-logo" alt="${esc(store.name)}" />`
+      : `<div class="sn-logo-placeholder">🏪</div>`;
+
+    container.innerHTML = `
+      <div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;align-items:center;">
+        <a href="product.html?id=${p.id}" class="btn btn-ghost btn-sm">← Back</a>
+        <button class="btn btn-primary" onclick="window.print()">🖨️ Print</button>
+        <button class="btn btn-whatsapp" id="wa-btn" onclick="sharePDF()">💬 Share PDF on WhatsApp</button>
+      </div>
+
+      <div class="sn" id="sales-note">
+
+        <!-- Header -->
+        <div class="sn-header">
+          <div>
+            ${logoHtml}
+            <div class="sn-store-name">${esc(store.name||'My Store')}</div>
+            <div class="sn-store-meta">
+              ${store.address ? esc(store.address) + (store.city ? ', ' + esc(store.city) : '') + '<br>' : ''}
+              ${store.phone ? 'Ph: ' + esc(store.phone) + '<br>' : ''}
+              ${store.email ? esc(store.email) + '<br>' : ''}
+              ${store.gst_number ? 'GSTIN: ' + esc(store.gst_number) : ''}
+            </div>
+          </div>
+          <div class="sn-header-right">
+            <div class="sn-doc-title">SALES NOTE</div>
+            <div class="sn-number"># ${noteNo}</div>
+            <div class="sn-date">${noteDate}</div>
+          </div>
+        </div>
+
+        <!-- Bill To / Details / Payment -->
+        <div class="sn-info-row">
+          <div>
+            <div class="sn-info-label">Bill To</div>
+            <div class="sn-info-value">
+              <strong>${esc(p.buyer_name)||'—'}</strong><br>
+              ${p.buyer_contact ? esc(p.buyer_contact) : ''}
+            </div>
+          </div>
+          <div>
+            <div class="sn-info-label">Details</div>
+            <div class="sn-info-value">
+              Sale Date: ${noteDate}<br>
+              ${p.condition ? 'Condition: ' + esc(p.condition) : 'Used / Refurbished'}
+            </div>
+          </div>
+          <div>
+            <div class="sn-info-label">Payment</div>
+            <div class="sn-info-value">
+              ${paymentSummary(p.sell_payment_mode, p.sell_cash_amount, p.sell_upi_amount, p.sell_due_amount, p.sell_due_cleared, p.sell_upi_ref)}<br>
+              Terms: Prepaid
+            </div>
+          </div>
+        </div>
+
+        <!-- Items table -->
+        <table class="sn-table">
+          <thead>
+            <tr>
+              <th>Item Description</th>
+              <th style="text-align:center;">Qty</th>
+              <th style="text-align:right;">Rate</th>
+              <th style="text-align:right;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <div class="sn-item-name">${esc(p.model)}</div>
+                <div class="sn-item-meta">${specLines.join('<br>')}</div>
+              </td>
+              <td style="text-align:center;">1</td>
+              <td style="text-align:right;">${fmt(sellAmt)}</td>
+              <td>${fmt(sellAmt)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Totals + Notes inline -->
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-top:1px solid #f0f0f0;padding-top:4px;gap:20px;">
+          <div class="sn-notes" style="margin-top:0;padding-top:0;border-top:none;flex:1;">
+            <div class="sn-section-label">Notes</div>
+            <div class="sn-terms-text">
+              <p>Amount in words: <strong>${amtWords}</strong></p>
+              ${p.sell_remark ? `<p>${esc(p.sell_remark)}</p>` : ''}
+            </div>
+          </div>
+          <div class="sn-totals">
+            <div class="sn-totals-row"><span class="sn-totals-label">Subtotal</span><span>${fmt(sellAmt)}</span></div>
+            ${store.gst_number ? `<div class="sn-totals-row"><span class="sn-totals-label">Tax (GST)</span><span>Included</span></div>` : ''}
+            <div class="sn-totals-row total"><span class="sn-totals-label">Total</span><span>${fmt(sellAmt)}</span></div>
+            <div class="sn-totals-row paid"><span>Amount Paid</span><span>${fmt(sellAmt - (p.sell_due_amount||0))}</span></div>
+            ${(p.sell_due_amount||0) > 0 ? `<div class="sn-totals-row" style="color:var(--warning);font-weight:600;border-bottom:none;"><span>Due Amount</span><span>${fmt(p.sell_due_amount)}</span></div>` : ''}
+          </div>
+        </div>
+
+        <!-- Bottom: Terms left | Stamp + Signatures right -->
+        <div class="sn-bottom">
+          <div>
+            <div class="sn-section-label">Terms &amp; Conditions</div>
+            <div class="sn-terms-text">
+              <p><strong>1. As-Is Sale:</strong> Device sold as used/refurbished. Buyer has inspected and tested the device. No claims for defects after sale.</p>
+              <p><strong>2. IMEI:</strong> Device sold with valid IMEI. Seller not liable for future network blocking or regulatory actions.</p>
+              <p><strong>3. Jurisdiction:</strong> Disputes subject to courts at Ahmedabad, Gujarat only.</p>
+            </div>
+          </div>
+          <div class="sn-right-col">
+            <div class="sn-stamp-wrap">
+              <svg width="180" height="72" viewBox="0 0 500 200" xmlns="http://www.w3.org/2000/svg">
+                <defs><style>.stamp{fill:none;stroke:#2e9e44;stroke-width:7;stroke-linecap:round;stroke-linejoin:round;}.stxt{font-family:Impact,Haettenschweiler,"Arial Narrow Bold",sans-serif;font-size:64px;font-weight:900;fill:#2e9e44;letter-spacing:2px;}</style></defs>
+                <rect x="20" y="20" width="460" height="160" rx="20" ry="20" class="stamp"/>
+                <rect x="40" y="40" width="420" height="120" rx="14" ry="14" class="stamp"/>
+                <text x="250" y="100" text-anchor="middle" dominant-baseline="middle" class="stxt">OK TESTED</text>
+              </svg>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div>
+                <div class="sn-sign-box"></div>
+                <div class="sn-sign-label" style="margin-top:5px;text-align:center;">Seller's Signature</div>
+              </div>
+              <div>
+                <div class="sn-sign-box"></div>
+                <div class="sn-sign-label" style="margin-top:5px;text-align:center;">Buyer's Signature</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sn-footer">
+          This is a computer-generated sales note · ${esc(store.name||'My Store')} · Powered by VyaparTrack
+        </div>
+      </div>`;
+    // Share PDF on WhatsApp: generate PDF → download → open WhatsApp
+    window.sharePDF = async function() {
+      const btn = document.getElementById('wa-btn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Generating PDF…';
+
+      const el = document.getElementById('sales-note');
+      const filename = `SalesNote-${noteNo}.pdf`;
+
+      const opt = {
+        margin:       [8, 10, 8, 10],
+        filename,
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2, useCORS: true },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
+
+      try {
+        await html2pdf().set(opt).from(el).save();
+        // After download, open WhatsApp so user can attach the saved PDF
+        setTimeout(() => {
+          window.open('https://wa.me/', '_blank');
+        }, 800);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '💬 Share PDF on WhatsApp';
+      }
+    };
+
+  })();
+</script>
+</body>
+</html>

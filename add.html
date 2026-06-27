@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Add Product – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+  <style>
+    .photo-upload-area {
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 24px; text-align: center; cursor: pointer;
+      transition: border-color .15s, background .15s; position: relative;
+    }
+    .photo-upload-area:hover, .photo-upload-area.drag-over {
+      border-color: var(--primary); background: var(--primary-light);
+    }
+    .photo-upload-area input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .photo-previews {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+      gap: 10px; margin-top: 12px;
+    }
+    .photo-preview-item {
+      position: relative; aspect-ratio: 1;
+      border-radius: var(--radius-sm); overflow: hidden; border: 1px solid var(--border);
+    }
+    .photo-preview-item img { width: 100%; height: 100%; object-fit: cover; }
+    .photo-preview-item .remove-photo {
+      position: absolute; top: 4px; right: 4px;
+      background: rgba(0,0,0,.6); color: #fff; border: none; border-radius: 50%;
+      width: 22px; height: 22px; cursor: pointer; font-size: .75rem;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .upload-progress { height: 4px; background: var(--surface-2); border-radius: 2px; margin-top: 8px; overflow: hidden; display: none; }
+    .upload-progress-fill { height: 100%; background: var(--primary); border-radius: 2px; transition: width .3s; }
+    .pay-mode-tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+    .pay-mode-btn {
+      padding: 7px 16px; border-radius: 20px; border: 1.5px solid var(--border);
+      background: var(--surface); color: var(--text-muted); font-size: .85rem;
+      font-weight: 500; cursor: pointer; transition: all .15s;
+    }
+    .pay-mode-btn.active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+    .section-title {
+      font-size: .78rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--text-muted);
+      padding-bottom: 10px; border-bottom: 1px solid var(--border); margin: 20px 0 16px;
+    }
+  </style>
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { supabase, requireAuth } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+  import { showToast, today, queueAction, genId, renderPaymentUI, getYearCode } from './js/utils.js';
+
+  (async () => {
+    const user = await requireAuth();
+    if (!user) return;
+
+    const container = renderLayout('add', user.id);
+    document.title = 'Add Product – VyaparTrack';
+    document.getElementById('topbar-title').textContent = 'Add Product';
+
+    if (!user.profile?.store_id) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">🏪</div><h3>No store assigned</h3><p>Contact your admin.</p></div>`;
+      return;
+    }
+
+    const storeId = user.profile.store_id;
+    let selectedFiles = [];
+
+    container.innerHTML = `
+      <div style="max-width:640px;">
+        <div style="margin-bottom:20px;"><h1>Add Product</h1><p>Enter the device details below</p></div>
+        <div class="card">
+          <div id="form-alert"></div>
+
+          <div class="section-title">📱 Device Info</div>
+          <div class="form-group">
+            <label class="form-label">Model Name <span class="req">*</span></label>
+            <input type="text" id="f-model" class="form-control" placeholder="e.g. Samsung Galaxy A52" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">IMEI Type</label>
+            <select id="f-imei-type" class="form-control">
+              <option value="single">Single SIM (1 IMEI)</option>
+              <option value="dual">Dual SIM (2 IMEI)</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">IMEI 1 <span class="req">*</span></label>
+              <input type="text" id="f-imei1" class="form-control" placeholder="15-digit IMEI" maxlength="20" inputmode="numeric" />
+            </div>
+            <div class="form-group" id="imei2-wrap" style="display:none;">
+              <label class="form-label">IMEI 2</label>
+              <input type="text" id="f-imei2" class="form-control" placeholder="15-digit IMEI" maxlength="20" inputmode="numeric" />
+            </div>
+          </div>
+
+          <div class="section-title">🔧 Device Specs</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Storage</label>
+              <select id="f-storage" class="form-control">
+                <option value="">Not specified</option>
+                <option>16GB</option><option>32GB</option><option>64GB</option>
+                <option>128GB</option><option>256GB</option><option>512GB</option><option>1TB</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">RAM</label>
+              <select id="f-ram" class="form-control">
+                <option value="">Not specified</option>
+                <option>2GB</option><option>3GB</option><option>4GB</option>
+                <option>6GB</option><option>8GB</option><option>12GB</option><option>16GB</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Color</label>
+              <input type="text" id="f-color" class="form-control" placeholder="e.g. Midnight Black" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Accessories Included</label>
+              <input type="text" id="f-accessories" class="form-control" placeholder="Box, Charger, Earphones" />
+            </div>
+          </div>
+
+          <div class="section-title">📸 Product Photos</div>
+          <div class="photo-upload-area" id="upload-area">
+            <input type="file" id="photo-input" accept="image/*" multiple />
+            <div style="font-size:2rem;margin-bottom:8px;">📷</div>
+            <div style="font-weight:500;margin-bottom:4px;">Tap to add photos</div>
+            <div style="font-size:.8rem;color:var(--text-muted);">Front, back, box — up to 5 photos</div>
+          </div>
+          <div class="photo-previews" id="photo-previews"></div>
+          <div class="upload-progress" id="upload-progress">
+            <div class="upload-progress-fill" id="upload-progress-fill" style="width:0%"></div>
+          </div>
+
+          <div class="section-title">🛒 Purchase Details</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Purchase Price (₹) <span class="req">*</span></label>
+              <input type="number" id="f-price" class="form-control" placeholder="0" min="0" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Purchase Date <span class="req">*</span></label>
+              <input type="date" id="f-date" class="form-control" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Seller Name <span class="req">*</span></label>
+              <input type="text" id="f-seller" class="form-control" placeholder="Seller's name" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Seller Contact</label>
+              <input type="tel" id="f-seller-contact" class="form-control" placeholder="+91 98765 43210" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Purchase Remark</label>
+            <textarea id="f-remark" class="form-control" placeholder="Any notes..."></textarea>
+          </div>
+
+          <div class="section-title">💳 Payment Mode (Purchase)</div>
+          <div id="buy-payment-ui"></div>
+
+          <div style="display:flex;gap:12px;margin-top:20px;">
+            <button class="btn btn-primary btn-lg" id="save-btn" style="flex:1;">💾 Save Product</button>
+            <a href="inventory.html" class="btn btn-outline btn-lg">Cancel</a>
+          </div>
+        </div>
+      </div>`;
+
+    document.getElementById('f-date').value = today();
+
+    // IMEI toggle
+    document.getElementById('f-imei-type').addEventListener('change', function() {
+      const show = this.value === 'dual';
+      document.getElementById('imei2-wrap').style.display = show ? '' : 'none';
+      if (!show) document.getElementById('f-imei2').value = '';
+    });
+
+    // Payment mode
+    let buyPayMode = 'cash';
+    const collectBuyPayment = renderPaymentUI('buy-payment-ui', 'buy', m => { buyPayMode = m; });
+
+    // Photos
+    const photoInput = document.getElementById('photo-input');
+    const previewsEl = document.getElementById('photo-previews');
+    const uploadArea = document.getElementById('upload-area');
+
+    uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('drag-over'));
+    uploadArea.addEventListener('drop', e => { e.preventDefault(); uploadArea.classList.remove('drag-over'); addFiles([...e.dataTransfer.files]); });
+    photoInput.addEventListener('change', () => { addFiles([...photoInput.files]); photoInput.value = ''; });
+
+    function addFiles(files) {
+      const imgs = files.filter(f => f.type.startsWith('image/'));
+      const rem  = 5 - selectedFiles.length;
+      if (imgs.length > rem) showToast('Max 5 photos', 'warning');
+      selectedFiles = [...selectedFiles, ...imgs.slice(0, rem)];
+      renderPreviews();
+    }
+
+    function renderPreviews() {
+      previewsEl.innerHTML = '';
+      selectedFiles.forEach((file, i) => {
+        const url = URL.createObjectURL(file);
+        const item = document.createElement('div');
+        item.className = 'photo-preview-item';
+        item.innerHTML = `<img src="${url}" /><button class="remove-photo" data-i="${i}">✕</button>`;
+        previewsEl.appendChild(item);
+      });
+      previewsEl.querySelectorAll('.remove-photo').forEach(btn => {
+        btn.addEventListener('click', () => { selectedFiles.splice(parseInt(btn.dataset.i), 1); renderPreviews(); });
+      });
+    }
+
+    async function uploadPhotos(productId) {
+      if (!selectedFiles.length) return [];
+      const bar = document.getElementById('upload-progress');
+      const fill = document.getElementById('upload-progress-fill');
+      bar.style.display = 'block';
+      const urls = [];
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+        const ext  = file.name.split('.').pop();
+        const path = `${storeId}/${productId}/${i+1}.${ext}`;
+        const { error } = await supabase.storage.from('product-photos').upload(path, file, { upsert: true });
+        if (!error) {
+          const { data: { publicUrl } } = supabase.storage.from('product-photos').getPublicUrl(path);
+          urls.push(publicUrl);
+        }
+        fill.style.width = `${((i+1)/selectedFiles.length)*100}%`;
+      }
+      bar.style.display = 'none';
+      return urls;
+    }
+
+    // Save
+    document.getElementById('save-btn').addEventListener('click', async () => {
+      const alertEl = document.getElementById('form-alert');
+      alertEl.innerHTML = '';
+
+      const model       = document.getElementById('f-model').value.trim();
+      const imei_1      = document.getElementById('f-imei1').value.trim();
+      const imei_2      = document.getElementById('f-imei2').value.trim() || null;
+      const price       = parseFloat(document.getElementById('f-price').value);
+      const date        = document.getElementById('f-date').value;
+      const seller      = document.getElementById('f-seller').value.trim();
+      const contact     = document.getElementById('f-seller-contact').value.trim() || null;
+      const remark      = document.getElementById('f-remark').value.trim() || null;
+      const storage     = document.getElementById('f-storage').value || null;
+      const ram         = document.getElementById('f-ram').value || null;
+      const color       = document.getElementById('f-color').value.trim() || null;
+      const accessories = document.getElementById('f-accessories').value.trim() || null;
+
+      const errs = [];
+      if (!model)  errs.push('Model name is required');
+      if (!imei_1) errs.push('IMEI 1 is required');
+      if (isNaN(price) || price < 0) errs.push('Valid purchase price is required');
+      if (!date)   errs.push('Purchase date is required');
+      if (!seller) errs.push('Seller name is required');
+      if (errs.length) { alertEl.innerHTML = `<div class="alert alert-danger">${errs.join('<br>')}</div>`; return; }
+
+      // Collect payment fields
+      const payData = collectBuyPayment(price);
+      if (payData.error) { alertEl.innerHTML = `<div class="alert alert-danger">${payData.error}</div>`; return; }
+
+      const btn = document.getElementById('save-btn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;margin-right:6px;vertical-align:middle;"></span>Saving...';
+
+      if (!navigator.onLine) {
+        const product = { id: genId(), store_id:storeId, model, imei_1, imei_2,
+          purchase_price:price, purchase_date:date, seller_name:seller,
+          seller_contact:contact, purchase_remark:remark,
+          storage, ram, color, accessories, ...payData.fields,
+          status:'in_stock', created_at:new Date().toISOString() };
+        await queueAction({ type:'insert_product', data:product });
+        showToast('Saved offline — will sync when online', 'warning');
+        window.location.href = 'inventory.html';
+        return;
+      }
+
+      const { data: inserted, error } = await supabase.from('products')
+        .insert({ store_id:storeId, model, imei_1, imei_2,
+          purchase_price:price, purchase_date:date, seller_name:seller,
+          seller_contact:contact, purchase_remark:remark,
+          storage, ram, color, accessories, ...payData.fields,
+          status:'in_stock' })
+        .select('id').single();
+
+      if (error) {
+        btn.disabled = false; btn.innerHTML = '💾 Save Product';
+        alertEl.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+        return;
+      }
+
+      if (selectedFiles.length) {
+        btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;margin-right:6px;vertical-align:middle;"></span>Uploading photos...';
+        const photoUrls = await uploadPhotos(inserted.id);
+        if (photoUrls.length) {
+          await supabase.from('products').update({ photo_url: JSON.stringify(photoUrls) }).eq('id', inserted.id);
+        }
+      }
+
+      showToast('Product added!', 'success');
+      window.location.href = 'inventory.html';
+    });
+
+  })();
+</script>
+</body>
+</html>

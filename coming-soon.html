@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coming Soon – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { requireAuth } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+
+  (async () => {
+    const user = await requireAuth();
+    if (!user) return;
+
+    const feature = new URLSearchParams(location.search).get('feature') || 'This Feature';
+    const container = renderLayout('', user.id);
+    document.title = `${feature} – Coming Soon`;
+    document.getElementById('topbar-title').textContent = feature;
+
+    const featureMap = {
+      'Reports':           { icon: '📊', desc: 'Detailed sales reports, profit breakdowns, and export to Excel/PDF.' },
+      'Expenses':          { icon: '💸', desc: 'Track your shop expenses, repairs, and overhead costs.' },
+      'Sales Analytics':   { icon: '📈', desc: 'Deep dive into your monthly and yearly sales trends.' },
+      'Profit Analytics':  { icon: '💰', desc: 'Profit per product, per month, and per category.' },
+      'Customers':         { icon: '👥', desc: 'Customer database with purchase history and contact info.' },
+      'Repairs':           { icon: '🔧', desc: 'Track repair jobs, parts used, and service charges.' },
+      'Bulk Import':       { icon: '📥', desc: 'Import products from Excel or CSV files.' },
+      'Notifications':     { icon: '🔔', desc: 'Low stock alerts and sale reminders.' },
+    };
+
+    const info = featureMap[feature] || { icon: '🚀', desc: 'This feature is being built and will be available soon.' };
+
+    container.innerHTML = `
+      <div style="max-width:500px;margin:60px auto;text-align:center;padding:0 16px;">
+        <div style="font-size:4rem;margin-bottom:16px;">${info.icon}</div>
+        <h1 style="margin-bottom:8px;">${feature}</h1>
+        <p style="font-size:1rem;margin-bottom:24px;">${info.desc}</p>
+
+        <div class="card" style="margin-bottom:24px;text-align:left;">
+          <h3 style="margin-bottom:12px;">🗓️ Coming Soon</h3>
+          <p style="margin-bottom:16px;">We're actively building this feature. Want it faster? Let us know!</p>
+          <a href="https://wa.me/919328820394?text=Hi%2C%20I%20want%20the%20${encodeURIComponent(feature)}%20feature%20in%20VyaparTrack"
+            target="_blank" class="btn btn-whatsapp btn-full">💬 Request This Feature</a>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+          <a href="dashboard.html" class="btn btn-primary">← Dashboard</a>
+          <a href="inventory.html" class="btn btn-outline">📦 Inventory</a>
+        </div>
+
+        <div style="margin-top:32px;">
+          <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:12px;">Other features you might need:</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;">
+            ${Object.keys(featureMap).filter(f => f !== feature).map(f =>
+              `<a href="coming-soon.html?feature=${encodeURIComponent(f)}" class="btn btn-outline btn-sm">${featureMap[f].icon} ${f}</a>`
+            ).join('')}
+          </div>
+        </div>
+      </div>`;
+  })();
+</script>
+</body>
+</html>
