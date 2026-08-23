@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reports – VyaparTrack</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="icon" href="assets/Logow.png" />
+  <style>
+    .rpt-stat { text-align:center; padding:20px 12px; }
+    .rpt-stat .stat-value { font-size:1.6rem; font-weight:800; }
+    .rpt-stat .stat-label { font-size:.78rem; color:var(--text-muted); margin-top:4px; text-transform:uppercase; letter-spacing:.05em; }
+    .rpt-stat .stat-sub   { font-size:.78rem; margin-top:3px; }
+
+    .range-btn { padding:6px 14px; border-radius:20px; border:1.5px solid var(--border); background:var(--surface); color:var(--text-muted); font-size:.82rem; font-weight:500; cursor:pointer; transition:all .15s; }
+    .range-btn.active { border-color:var(--primary); background:var(--primary-light); color:var(--primary); }
+
+    .chart-wrap { position:relative; width:100%; height:200px; }
+    .chart-wrap canvas { width:100% !important; }
+
+    .rpt-table th, .rpt-table td { padding:10px 12px; font-size:.82rem; }
+    .rpt-table thead th { font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); border-bottom:2px solid var(--border); }
+    .rpt-table tbody tr:hover { background:var(--surface-2); cursor:pointer; }
+    .rpt-table tbody td { border-bottom:1px solid var(--border); }
+
+    .export-btn { display:inline-flex; align-items:center; gap:6px; }
+
+    @media (max-width:600px) {
+      .stats-row { grid-template-columns:1fr 1fr !important; }
+      .charts-row { grid-template-columns:1fr !important; }
+    }
+  </style>
+</head>
+<body>
+<script src="js/config.js"></script>
+<script type="module">
+  import { supabase, requireAuth } from './js/supabase.js';
+  import { renderLayout } from './js/layout.js';
+  import { fmt, fmtDate, esc } from './js/utils.js';
+
+  (async () => {
+    const user = await requireAuth();
+    if (!user) return;
+
+    const container = renderLayout('reports', user.id);
+    document.title = 'Reports – VyaparTrack';
+    document.getElementById('topbar-title').textContent = 'Reports';
+    document.getElementById('user-badge').textContent = user.profile?.name || user.email?.split('@')[0] || '';
+
+    if (!user.profile?.store_id) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">🏪</div><h3>No store assigned</h3></div>`;
+      return;
+    }
+
+    const storeId = user.profile.store_id;
+    container.innerHTML = `<div style="text-align:center;padding:60px;"><div class="spinner"></div></div>`;
+
+    // ── Fetch all products ──────────────────────────────────────────
+    const { data: products, error } = await supabase
+      .from('products').select('*').eq('store_id', storeId).order('created_at', { ascending: false });
+
+    if (error) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">❌</div><h3>Failed to load data</h3></div>`;
+      return;
+    }
+
+    const all = products || [];
+    let range = '30'; // default: last 30 days
+
+    // ── Date range helpers ──────────────────────────────────────────
+    function getRangeStart(r) {
+      const now = new Date();
+      if (r === '7')   { now.setDate(now.getDate() - 7); return now; }
+      if (r === '30')  { now.setDate(now.getDate() - 30); return now; }
+      if (r === '90')  { now.setDate(now.getDate() - 90); return now; }
+      if (r === '365') { now.setFullYear(now.getFullYear() - 1); return now; }
+      return null; // 'all'
+    }
+
+    function inRange(dateStr, r) {
+      if (!dateStr || r === 'all') return true;
+      const d = new Date(dateStr);
+      return d >= getRangeStart(r);
+    }
+
+    // ── Compute stats ───────────────────────────────────────────────
+    function compute(r) {
+      const sold = all.filter(p => p.status === 'sold' && inRange(p.sell_date, r));
+      const bought = all.filter(p => inRange(p.purchase_date, r));
+
+      const revenue  = sold.reduce((s, p) => s + (p.sell_price || 0), 0);
+      const cost     = sold.reduce((s, p) => s + (p.purchase_price || 0), 0);
+      const profit   = revenue - cost;
+      const margin   = revenue ? ((profit / revenue) * 100).toFixed(1) : '0.0';
+      const dues     = all.filter(p => (p.sell_due_amount || 0) > 0 && !p.sell_due_cleared);
+      const totalDue = dues.reduce((s, p) => s + (p.sell_due_amount || 0), 0);
+      const avgProfit = sold.length ? (profit / sold.length) : 0;
+
+      // Monthly breakdown (last 12 months)
+      const monthMap = {};
+      sold.forEach(p => {
+        if (!p.sell_date) return;
+        const key = new Date(p.sell_date).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+        if (!monthMap[key]) monthMap[key] = { sales: 0, revenue: 0, profit: 0 };
+        monthMap[key].sales++;
+        monthMap[key].revenue += p.sell_price || 0;
+        monthMap[key].profit  += (p.sell_price || 0) - (p.purchase_price || 0);
+      });
+      const months = Object.keys(monthMap).slice(-12);
+
+      // Payment mode breakdown
+      const payModes = {};
+      sold.forEach(p => {
+        const m = p.sell_payment_mode || 'cash';
+        payModes[m] = (payModes[m] || 0) + 1;
+      });
+
+      // Top models
+      const modelMap = {};
+      sold.forEach(p => {
+        const m = p.model;
+        if (!modelMap[m]) modelMap[m] = { count: 0, revenue: 0, profit: 0 };
+        modelMap[m].count++;
+        modelMap[m].revenue += p.sell_price || 0;
+        modelMap[m].profit  += (p.sell_price || 0) - (p.purchase_price || 0);
+      });
+      const topModels = Object.entries(modelMap)
+        .sort((a, b) => b[1].profit - a[1].profit)
+        .slice(0, 10)
+        .map(([model, d]) => ({ model, ...d }));
+
+      return { sold, bought, revenue, cost, profit, margin, totalDue, dues, avgProfit,
+               months, monthMap, payModes, topModels };
+    }
+
+    // ── Draw bar chart ──────────────────────────────────────────────
+    function drawBar(id, labels, datasets) {
+      const canvas = document.getElementById(id);
+      if (!canvas) return;
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const tc = isDark ? '#94a3b8' : '#6b7280';
+      const gc = isDark ? '#334155' : '#e5e7eb';
+      canvas.width  = canvas.offsetWidth || 500;
+      canvas.height = 200;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      const pad = { t:16, r:16, b:40, l:64 };
+      const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+      ctx.clearRect(0, 0, W, H);
+      if (!labels.length || datasets.every(ds => ds.data.every(v => v === 0))) {
+        ctx.fillStyle = tc; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('No data for this period', W/2, H/2); return;
+      }
+      const allVals = datasets.flatMap(ds => ds.data);
+      const maxV = Math.max(...allVals) * 1.15 || 1;
+      const n = labels.length;
+      const slotW = cW / n;
+      const barW  = (slotW / (datasets.length + 1)) * 0.9;
+
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.t + cH - (i / 4) * cH;
+        ctx.strokeStyle = gc; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + cW, y); ctx.stroke();
+        ctx.fillStyle = tc; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+        const v = maxV * i / 4;
+        ctx.fillText(v >= 100000 ? `${(v/100000).toFixed(1)}L` : v >= 1000 ? `${(v/1000).toFixed(0)}k` : Math.round(v), pad.l - 6, y + 3);
+      }
+
+      labels.forEach((lbl, i) => {
+        datasets.forEach((ds, di) => {
+          const v = ds.data[i] || 0;
+          const x = pad.l + i * slotW + (di + 0.5) * (slotW / (datasets.length + 1));
+          const bH = Math.max(2, (v / maxV) * cH);
+          const y  = pad.t + cH - bH;
+          ctx.fillStyle = ds.color;
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(x, y, barW, bH, 3); else ctx.rect(x, y, barW, bH);
+          ctx.fill();
+        });
+        ctx.fillStyle = tc; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(lbl, pad.l + i * slotW + slotW / 2, H - pad.b + 13);
+      });
+
+      // Legend
+      let lx = pad.l;
+      datasets.forEach(ds => {
+        ctx.fillStyle = ds.color;
+        ctx.fillRect(lx, H - 10, 10, 8);
+        ctx.fillStyle = tc; ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
+        ctx.fillText(ds.label, lx + 13, H - 3);
+        lx += ctx.measureText(ds.label).width + 28;
+      });
+    }
+
+    // ── Render full page ────────────────────────────────────────────
+    function render(r) {
+      const s = compute(r);
+      const profitColor = s.profit >= 0 ? 'var(--success)' : 'var(--danger)';
+
+      container.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px;">
+          <div><h1>Reports</h1><p>${s.sold.length} sales in selected period</p></div>
+          <button class="btn btn-outline export-btn" id="export-csv-btn">⬇️ Export CSV</button>
+        </div>
+
+        <!-- Range selector -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">
+          ${['7','30','90','365','all'].map(v => `
+            <button class="range-btn${r===v?' active':''}" data-range="${v}">
+              ${v==='7'?'7 Days':v==='30'?'30 Days':v==='90'?'90 Days':v==='365'?'1 Year':'All Time'}
+            </button>`).join('')}
+        </div>
+
+        <!-- Summary stats -->
+        <div class="card" style="margin-bottom:16px;padding:0;">
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;" class="stats-row">
+            <div class="rpt-stat" style="border-right:1px solid var(--border);">
+              <div class="stat-value" style="color:var(--primary);">${fmt(s.revenue)}</div>
+              <div class="stat-label">Revenue</div>
+            </div>
+            <div class="rpt-stat" style="border-right:1px solid var(--border);">
+              <div class="stat-value" style="color:${profitColor};">${fmt(s.profit)}</div>
+              <div class="stat-label">Profit</div>
+              <div class="stat-sub" style="color:${profitColor};">${s.margin}% margin</div>
+            </div>
+            <div class="rpt-stat" style="border-right:1px solid var(--border);">
+              <div class="stat-value">${s.sold.length}</div>
+              <div class="stat-label">Units Sold</div>
+              <div class="stat-sub" style="color:var(--text-muted);">avg ${fmt(s.avgProfit)} profit</div>
+            </div>
+            <div class="rpt-stat" style="border-right:1px solid var(--border);">
+              <div class="stat-value">${fmt(s.cost)}</div>
+              <div class="stat-label">Total Cost</div>
+            </div>
+            <div class="rpt-stat">
+              <div class="stat-value" style="color:${s.totalDue>0?'var(--warning)':'var(--success)'};">${fmt(s.totalDue)}</div>
+              <div class="stat-label">Pending Dues</div>
+              <div class="stat-sub" style="color:var(--text-muted);">${s.dues.length} buyer(s)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;" class="charts-row">
+          <div class="card">
+            <div class="card-header" style="margin-bottom:12px;"><h3>Monthly Performance</h3></div>
+            <div class="chart-wrap"><canvas id="chart-monthly"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-header" style="margin-bottom:12px;"><h3>Payment Methods</h3></div>
+            <div id="pay-breakdown" style="padding:8px 0;"></div>
+          </div>
+        </div>
+
+        <!-- Top models table -->
+        <div class="card" style="margin-bottom:16px;padding:0;">
+          <div class="card-header" style="padding:16px 16px 12px;"><h3>Top Models by Profit</h3></div>
+          ${s.topModels.length ? `
+          <div class="table-wrap" style="border:none;border-radius:0;">
+            <table class="rpt-table" style="width:100%;border-collapse:collapse;">
+              <thead><tr>
+                <th>#</th><th>Model</th><th>Units Sold</th>
+                <th>Revenue</th><th>Profit</th><th>Avg Profit/unit</th>
+              </tr></thead>
+              <tbody>
+                ${s.topModels.map((m, i) => `
+                <tr onclick="location.href='inventory.html?status=sold'" title="View in inventory">
+                  <td style="color:var(--text-muted);">${i+1}</td>
+                  <td><strong>${esc(m.model)}</strong></td>
+                  <td>${m.count}</td>
+                  <td>${fmt(m.revenue)}</td>
+                  <td style="color:${m.profit>=0?'var(--success)':'var(--danger)'};">${fmt(m.profit)}</td>
+                  <td style="color:var(--text-muted);">${fmt(m.count ? m.profit/m.count : 0)}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>` : `<div class="empty-state" style="padding:32px;"><div class="empty-icon">📭</div><h3>No sales yet</h3></div>`}
+        </div>
+
+        <!-- Pending dues -->
+        ${s.dues.length ? `
+        <div class="card" style="padding:0;">
+          <div class="card-header" style="padding:16px 16px 12px;">
+            <h3>⏳ Pending Dues</h3>
+            <span style="font-size:.8rem;color:var(--warning);font-weight:600;">${fmt(s.totalDue)} outstanding</span>
+          </div>
+          <div class="table-wrap" style="border:none;border-radius:0;">
+            <table class="rpt-table" style="width:100%;border-collapse:collapse;">
+              <thead><tr><th>Buyer</th><th>Model</th><th>Sell Date</th><th>Due Amount</th><th></th></tr></thead>
+              <tbody>
+                ${s.dues.map(p => `
+                <tr>
+                  <td><strong>${esc(p.buyer_name)||'—'}</strong>${p.buyer_contact?`<br><span style="font-size:.72rem;color:var(--text-muted);">${esc(p.buyer_contact)}</span>`:''}</td>
+                  <td>${esc(p.model)}</td>
+                  <td style="font-size:.8rem;">${fmtDate(p.sell_date)}</td>
+                  <td style="color:var(--warning);font-weight:600;">${fmt(p.sell_due_amount)}</td>
+                  <td><a href="product.html?id=${p.id}" class="btn btn-outline btn-sm">View</a></td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>` : ''}
+      `;
+
+      // Wire range buttons
+      container.querySelectorAll('.range-btn').forEach(btn => {
+        btn.addEventListener('click', () => { range = btn.dataset.range; render(range); });
+      });
+
+      // Draw monthly chart
+      drawBar('chart-monthly', s.months,
+        [
+          { label: 'Revenue', color: '#2563eb', data: s.months.map(m => s.monthMap[m]?.revenue || 0) },
+          { label: 'Profit',  color: '#16a34a', data: s.months.map(m => s.monthMap[m]?.profit  || 0) },
+        ]
+      );
+
+      // Payment breakdown bars
+      const payEl = document.getElementById('pay-breakdown');
+      if (payEl) {
+        const modeLabels = { cash: '💵 Cash', upi: '📱 UPI', mix: '🔀 Mix', due: '⏳ Due' };
+        const modeColors = { cash: '#2563eb', upi: '#16a34a', mix: '#d97706', due: '#dc2626' };
+        const total = Object.values(s.payModes).reduce((a, b) => a + b, 0) || 1;
+        if (!total || Object.keys(s.payModes).length === 0) {
+          payEl.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:.875rem;">No sales data</div>`;
+        } else {
+          payEl.innerHTML = Object.entries(s.payModes).sort((a,b) => b[1]-a[1]).map(([mode, count]) => {
+            const pct = ((count / total) * 100).toFixed(1);
+            return `
+              <div style="margin-bottom:12px;padding:0 4px;">
+                <div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:4px;">
+                  <span>${modeLabels[mode] || mode}</span>
+                  <span style="font-weight:600;">${count} sales (${pct}%)</span>
+                </div>
+                <div style="height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden;">
+                  <div style="height:100%;width:${pct}%;background:${modeColors[mode]||'var(--primary)'};border-radius:4px;transition:width .4s;"></div>
+                </div>
+              </div>`;
+          }).join('');
+        }
+      }
+
+      // CSV Export
+      document.getElementById('export-csv-btn')?.addEventListener('click', () => exportCSV(s.sold));
+    }
+
+    // ── CSV export ──────────────────────────────────────────────────
+    function exportCSV(rows) {
+      const headers = ['Note No','Model','IMEI','Color','Storage','RAM','Buyer','Contact','Purchase Price','Sell Price','Profit','Sell Date','Payment Mode','Cash','UPI','Due','Remark'];
+      const lines = [headers.join(',')];
+      rows.forEach(p => {
+        const profit = (p.sell_price||0) - (p.purchase_price||0);
+        lines.push([
+          p.note_number || '',
+          `"${(p.model||'').replace(/"/g,'""')}"`,
+          p.imei_1 || '',
+          p.color || '',
+          p.storage || '',
+          p.ram || '',
+          `"${(p.buyer_name||'').replace(/"/g,'""')}"`,
+          p.buyer_contact || '',
+          p.purchase_price || 0,
+          p.sell_price || 0,
+          profit,
+          p.sell_date || '',
+          p.sell_payment_mode || '',
+          p.sell_cash_amount || '',
+          p.sell_upi_amount || '',
+          p.sell_due_amount || '',
+          `"${(p.sell_remark||'').replace(/"/g,'""')}"`,
+        ].join(','));
+      });
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `VyaparTrack-Report-${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+    }
+
+    render(range);
+  })();
+</script>
+</body>
+</html>

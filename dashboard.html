@@ -57,7 +57,7 @@
           { icon:'📦', label:'Total Products', color:'#2563eb', bg:'#eff6ff', link:'inventory.html' },
           { icon:'🟢', label:'In Stock',       color:'#16a34a', bg:'#f0fdf4', link:'inventory.html?status=in_stock' },
           { icon:'✅', label:'Sold',           color:'#d97706', bg:'#fffbeb', link:'inventory.html?status=sold' },
-          { icon:'💰', label:'Total Profit',   color:'#7c3aed', bg:'#f5f3ff', link:'coming-soon.html?feature=Reports' },
+          { icon:'💰', label:'Total Profit',   color:'#7c3aed', bg:'#f5f3ff', link:'reports.html' },
         ].map(c => `
           <div class="stat-card" onclick="location.href='${c.link}'" title="Click to view">
             <div class="stat-icon" style="background:${c.bg};color:${c.color};">${c.icon}</div>
@@ -70,7 +70,7 @@
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px;">
         <a href="add.html" class="btn btn-primary">➕ Add Product</a>
         <a href="inventory.html" class="btn btn-outline">📦 View Inventory</a>
-        <a href="coming-soon.html?feature=Reports" class="btn btn-outline">📊 Reports</a>
+        <a href="reports.html" class="btn btn-outline">📈 Reports</a>
         <a href="coming-soon.html?feature=Expenses" class="btn btn-outline">💸 Expenses</a>
       </div>
 
